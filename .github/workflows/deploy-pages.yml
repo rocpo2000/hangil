@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - claude/gongdrum-app-publish-s5uaxe
+      - claude/hangil-webpage-deploy-ojbij9
   workflow_dispatch:
 
 permissions:
