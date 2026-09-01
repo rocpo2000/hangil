@@ -308,7 +308,7 @@
 <body>
 <div id="app"></div>
 <div id="toast" class="toast" aria-live="polite"></div>
-<script type="application/json" id="state-data">{"drumTypes":[{"id":"dt1","name":"A 드럼"},{"id":"dt2","name":"B 드럼"},{"id":"dt3","name":"C 드럼"},{"id":"dt4","name":"OPEN 드럼"},{"id":"dt5","name":"P.E. 드럼"},{"id":"dt6","name":"TOTE"}],"transactions":[{"id":"sample-tx-1","type":"in","date":"2026-08-31","drumTypeId":"dt4","qty":10,"party":"샘플거래처","handler":"홍길동","driverId":"sample-driver-1","note":"샘플 데이터입니다","ts":1788166597072}],"drivers":[{"id":"sample-driver-1","name":"홍길동","pin":"1111"},{"id":"sample-driver-2","name":"김철수","pin":"2222"}],"adminPassword":"admin1234"}</script>
+<script type="application/json" id="state-data">{"drumTypes":[{"id":"dt1","name":"A 드럼"},{"id":"dt2","name":"B 드럼"},{"id":"dt3","name":"C 드럼"},{"id":"dt4","name":"OPEN 드럼"},{"id":"dt5","name":"P.E. 드럼"},{"id":"dt6","name":"TOTE"}],"transactions":[{"id":"sample-tx-1","type":"in","date":"2026-08-31","drumTypeId":"dt4","qty":10,"party":"샘플거래처","partyId":"sample-party-1","handler":"홍길동","driverId":"sample-driver-1","note":"샘플 데이터입니다","ts":1788166597072}],"drivers":[{"id":"sample-driver-1","name":"홍길동","pin":"1111"},{"id":"sample-driver-2","name":"김철수","pin":"2222"}],"parties":[{"id":"sample-party-1","name":"샘플거래처"},{"id":"sample-party-2","name":"세척 후 재사용"}],"adminPassword":"admin1234"}</script>
 <script id="app-script">
 (function(){
   "use strict";
@@ -320,6 +320,7 @@
   var HANDLER_KEY = "gongdrum_last_handler_v1";
   var SESSION_KEY = "gongdrum_session_v1";
   var STATE_KEY = "gongdrum_state_v1";
+  var OTHER_PARTY_ID = "__other__";
   var ADMIN_TABS = ["dashboard","in","out","history","settings"];
   var DRIVER_TABS = ["in","out","history"];
 
@@ -337,12 +338,14 @@
   var pendingDeleteTx = null;
   var pendingDeleteType = null;
   var pendingDeleteDriver = null;
+  var pendingDeleteParty = null;
   var submitting = { "in": false, "out": false };
-  var formErrors = { "in": {}, "out": {}, addType: "", addDriver: "", adminPw: "" };
+  var formErrors = { "in": {}, "out": {}, addType: "", addParty: "", addDriver: "", adminPw: "" };
   var formDrafts = {
-    "in": { date: "", drumTypeId: "", qty: "", party: "", handler: "", note: "" },
-    "out": { date: "", drumTypeId: "", qty: "", party: "", handler: "", note: "" },
+    "in": { date: "", drumTypeId: "", qty: "", partyId: "", party: "", handler: "", note: "" },
+    "out": { date: "", drumTypeId: "", qty: "", partyId: "", party: "", handler: "", note: "" },
     addType: "",
+    addParty: "",
     login: { driverId: "", pin: "", adminPw: "" },
     addDriver: { name: "", pin: "" },
     adminPw: { value: "" }
@@ -352,6 +355,8 @@
   var editingDriverId = null;
   var editingDriverName = "";
   var editingDriverPin = "";
+  var editingPartyId = null;
+  var editingPartyValue = "";
   var toastTimer = null;
   var draftSaveTimer = null;
 
@@ -409,6 +414,9 @@
   function typeInUse(state, id){
     return state.transactions.some(function(t){ return t.drumTypeId === id; });
   }
+  function partyInUse(state, id){
+    return state.transactions.some(function(t){ return t.partyId === id; });
+  }
 
   /* ---------- persistence helpers (per-viewer, not shared) ---------- */
   function ss_get(k){ try { return sessionStorage.getItem(k); } catch(e){ return null; } }
@@ -432,6 +440,7 @@
       if (d && d["in"]) formDrafts["in"] = Object.assign(formDrafts["in"], d["in"]);
       if (d && d["out"]) formDrafts["out"] = Object.assign(formDrafts["out"], d["out"]);
       if (d && typeof d.addType === "string") formDrafts.addType = d.addType;
+      if (d && typeof d.addParty === "string") formDrafts.addParty = d.addParty;
     } catch(e){}
   }
   function saveLastHandler(name){
@@ -528,6 +537,7 @@
       ],
       transactions: [],
       drivers: [],
+      parties: [],
       adminPassword: "admin1234"
     };
   }
@@ -543,6 +553,7 @@
     }
     if (!STATE || !Array.isArray(STATE.drumTypes)) STATE = defaultState();
     if (!Array.isArray(STATE.drivers)) STATE.drivers = [];
+    if (!Array.isArray(STATE.parties)) STATE.parties = [];
     if (typeof STATE.adminPassword !== "string" || !STATE.adminPassword) STATE.adminPassword = "admin1234";
   }
 
@@ -782,7 +793,22 @@
     if (err.qty) html += '<div class="err">' + esc(err.qty) + '</div>';
     html += '</div>';
 
-    html += field("party", partyLabel, "text", d.party, err.party, partyPh);
+    // party select
+    html += '<div class="field' + (err.partyId?" has-err":"") + '">';
+    html += '<label for="f-partyId">' + esc(partyLabel) + '</label>';
+    html += '<select class="input" id="f-partyId" data-field="partyId">';
+    html += '<option value="">선택해주세요</option>';
+    STATE.parties.forEach(function(p){
+      var sel = d.partyId === p.id ? " selected" : "";
+      html += '<option value="' + p.id + '"' + sel + '>' + esc(p.name) + '</option>';
+    });
+    html += '<option value="' + OTHER_PARTY_ID + '"' + (d.partyId === OTHER_PARTY_ID ? " selected" : "") + '>기타 (직접 입력)</option>';
+    html += '</select>';
+    if (err.partyId) html += '<div class="err">' + esc(err.partyId) + '</div>';
+    html += '</div>';
+    if (d.partyId === OTHER_PARTY_ID){
+      html += field("party", partyLabel + " 직접 입력", "text", d.party, err.party, partyPh);
+    }
     if (session && session.role === "driver"){
       html += '<div class="stock-hint">담당자 <b>' + esc(session.name) + '</b> 님으로 등록돼요</div>';
     } else {
@@ -841,6 +867,34 @@
     html += '</div>';
     if (formErrors.addType) html += '<div class="err" style="margin-top:6px">' + esc(formErrors.addType) + '</div>';
 
+    html += '<div class="section-title">공급처 관리</div>';
+    if (STATE.parties.length === 0){
+      html += '<div class="empty">등록된 공급처가 없어요. 아래에서 추가해주세요.<br>추가하기 전에는 입고·출고 등록 시 "기타"로만 입력할 수 있어요.</div>';
+    } else {
+      STATE.parties.forEach(function(p){
+        var inUse = partyInUse(STATE, p.id);
+        var pendingCls = pendingDeleteParty === p.id ? " pending" : "";
+        html += '<div class="type-row">';
+        if (editingPartyId === p.id){
+          html += '<input class="input" style="flex:1" data-field="editParty" value="' + esc(editingPartyValue) + '">';
+          html += '<button type="button" data-action="savePartyEdit" data-id="' + p.id + '">저장</button>';
+          html += '<button type="button" data-action="cancelPartyEdit">취소</button>';
+        } else {
+          html += '<span class="tname">' + esc(p.name) + '</span>';
+          if (inUse) html += '<span class="tcount">사용 중</span>';
+          html += '<button type="button" data-action="startPartyEdit" data-id="' + p.id + '" aria-label="이름 수정">수정</button>';
+          html += '<button type="button" class="del' + pendingCls + '" data-action="deleteParty" data-id="' + p.id + '"' + (inUse?" disabled title=\"사용 중인 공급처는 삭제할 수 없어요\"":"") + '>' + (pendingDeleteParty===p.id ? "정말?" : "삭제") + '</button>';
+        }
+        html += '</div>';
+      });
+    }
+
+    html += '<div class="add-type-row" data-form="_addParty">';
+    html += '<input class="input" placeholder="새 공급처 이름 (예: 대성상사)" data-field="addParty" value="' + esc(formDrafts.addParty) + '">';
+    html += '<button type="button" class="btn primary small" data-action="addParty">추가</button>';
+    html += '</div>';
+    if (formErrors.addParty) html += '<div class="err" style="margin-top:6px">' + esc(formErrors.addParty) + '</div>';
+
     html += '<div class="section-title">기사 관리 (이름·PIN)</div>';
     if (STATE.drivers.length === 0){
       html += '<div class="empty">등록된 기사님이 없어요. 아래에서 추가해주세요.</div>';
@@ -891,8 +945,10 @@
     pendingDeleteTx = null;
     pendingDeleteType = null;
     pendingDeleteDriver = null;
+    pendingDeleteParty = null;
     editingTypeId = null;
     editingDriverId = null;
+    editingPartyId = null;
     render();
   }
 
@@ -954,7 +1010,8 @@
       var stock = computeStock(STATE)[d.drumTypeId] || 0;
       if (qty > stock) errors.qty = "재고보다 많아요 (현재 " + fmtNum(stock) + "개)";
     }
-    if (!d.party || !d.party.trim()) errors.party = kind === "in" ? "공급처를 입력해주세요" : "용도나 출고처를 입력해주세요";
+    if (!d.partyId) errors.partyId = "공급처를 선택해주세요";
+    else if (d.partyId === OTHER_PARTY_ID && (!d.party || !d.party.trim())) errors.party = kind === "in" ? "공급처를 입력해주세요" : "용도나 출고처를 입력해주세요";
     var isDriver = session && session.role === "driver";
     if (!isDriver && (!d.handler || !d.handler.trim())) errors.handler = "담당자를 입력해주세요";
     return errors;
@@ -971,9 +1028,18 @@
     var isDriver = session.role === "driver";
     var qty = parseInt(d.qty, 10);
     var handlerName = isDriver ? session.name : d.handler.trim();
+    var partyId, partyName;
+    if (d.partyId === OTHER_PARTY_ID){
+      partyId = null;
+      partyName = d.party.trim();
+    } else {
+      var pMatch = STATE.parties.filter(function(p){ return p.id === d.partyId; })[0];
+      partyId = d.partyId;
+      partyName = pMatch ? pMatch.name : "";
+    }
     var tx = {
       id: genId(), type: kind, date: d.date, drumTypeId: d.drumTypeId,
-      qty: qty, party: d.party.trim(), handler: handlerName,
+      qty: qty, party: partyName, partyId: partyId, handler: handlerName,
       driverId: isDriver ? session.driverId : null,
       note: (d.note || "").trim(), ts: Date.now()
     };
@@ -984,7 +1050,7 @@
     publishState(newState, { flash: (kind==="in"?"입고를 등록했어요":"출고를 등록했어요"), keepTab: kind }).then(function(res){
       submitting[kind] = false;
       if (res.ok){
-        formDrafts[kind] = { date: todayStr(), drumTypeId: d.drumTypeId, qty: "", party: d.party, handler: d.handler, note: "" };
+        formDrafts[kind] = { date: todayStr(), drumTypeId: d.drumTypeId, qty: "", partyId: d.partyId, party: d.party, handler: d.handler, note: "" };
         formErrors[kind] = {};
         ss_set(DRAFT_KEY, JSON.stringify(formDrafts));
         if (res.local) render();
@@ -1047,6 +1113,46 @@
     pendingDeleteType = null;
     var newState = Object.assign({}, STATE, { drumTypes: STATE.drumTypes.filter(function(t){ return t.id !== id; }) });
     publishState(newState, { flash: "드럼 종류를 삭제했어요", keepTab: "settings" }).then(function(){ render(); });
+  }
+
+  function addParty(){
+    if (isReadOnly) return;
+    var name = (formDrafts.addParty || "").trim();
+    if (!name){ formErrors.addParty = "공급처 이름을 입력해주세요"; render(); return; }
+    if (STATE.parties.some(function(p){ return p.name === name; })){
+      formErrors.addParty = "이미 있는 이름이에요";
+      render();
+      return;
+    }
+    formErrors.addParty = "";
+    var newParty = { id: genId(), name: name };
+    var newState = Object.assign({}, STATE, { parties: STATE.parties.concat([newParty]) });
+    formDrafts.addParty = "";
+    publishState(newState, { flash: "공급처를 추가했어요", keepTab: "settings" }).then(function(){ render(); });
+  }
+  function startPartyEdit(id){
+    var p = STATE.parties.filter(function(x){ return x.id === id; })[0];
+    if (!p) return;
+    editingPartyId = id;
+    editingPartyValue = p.name;
+    render();
+  }
+  function cancelPartyEdit(){ editingPartyId = null; render(); }
+  function savePartyEdit(id){
+    var name = (editingPartyValue || "").trim();
+    if (!name) return;
+    var newState = Object.assign({}, STATE, {
+      parties: STATE.parties.map(function(p){ return p.id === id ? Object.assign({}, p, { name: name }) : p; })
+    });
+    editingPartyId = null;
+    publishState(newState, { flash: "공급처 이름을 수정했어요", keepTab: "settings" }).then(function(){ render(); });
+  }
+  function deleteParty(id){
+    if (isReadOnly || partyInUse(STATE, id)) return;
+    if (pendingDeleteParty !== id){ pendingDeleteParty = id; render(); return; }
+    pendingDeleteParty = null;
+    var newState = Object.assign({}, STATE, { parties: STATE.parties.filter(function(p){ return p.id !== id; }) });
+    publishState(newState, { flash: "공급처를 삭제했어요", keepTab: "settings" }).then(function(){ render(); });
   }
 
   function addDriver(){
@@ -1114,6 +1220,11 @@
     else if (action === "cancelTypeEdit"){ cancelTypeEdit(); }
     else if (action === "saveTypeEdit"){ saveTypeEdit(t.dataset.id); }
     else if (action === "deleteType"){ if (!t.disabled) deleteType(t.dataset.id); }
+    else if (action === "addParty"){ addParty(); }
+    else if (action === "startPartyEdit"){ startPartyEdit(t.dataset.id); }
+    else if (action === "cancelPartyEdit"){ cancelPartyEdit(); }
+    else if (action === "savePartyEdit"){ savePartyEdit(t.dataset.id); }
+    else if (action === "deleteParty"){ if (!t.disabled) deleteParty(t.dataset.id); }
     else if (action === "setLoginMode"){ setLoginMode(t.dataset.value); }
     else if (action === "logout"){ logout(); }
     else if (action === "addDriver"){ addDriver(); }
@@ -1137,12 +1248,14 @@
     if (!el.dataset || !el.dataset.field) return;
     if (el.dataset.field === "editType"){ editingTypeValue = el.value; return; }
     if (el.dataset.field === "addType"){ formDrafts.addType = el.value; scheduleDraftSave(); return; }
+    if (el.dataset.field === "editParty"){ editingPartyValue = el.value; return; }
+    if (el.dataset.field === "addParty"){ formDrafts.addParty = el.value; scheduleDraftSave(); return; }
     if (el.dataset.field === "editDriverName"){ editingDriverName = el.value; return; }
     if (el.dataset.field === "editDriverPin"){ editingDriverPin = el.value; return; }
     var form = el.closest("[data-form]");
     if (form){
       var kind = form.dataset.form;
-      if (kind === "_addType") return; // already handled above by field name
+      if (kind === "_addType" || kind === "_addParty") return; // already handled above by field name
       if (formDrafts[kind]) formDrafts[kind][el.dataset.field] = el.value;
       // login / driver-PIN / admin-password fields hold credentials: keep them
       // in memory only, never mirrored into sessionStorage.
@@ -1155,6 +1268,7 @@
     var el = e.target;
     if (el.dataset && el.dataset.action === "setHistoryDrum"){ setHistoryDrum(el.value); return; }
     onInput(e);
+    if (el.dataset && el.dataset.field === "partyId"){ render(); }
   }
 
   /* ---------- init ---------- */
