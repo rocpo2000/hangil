@@ -309,6 +309,38 @@
 <div id="app"></div>
 <div id="toast" class="toast" aria-live="polite"></div>
 <script type="application/json" id="state-data">{"drumTypes":[{"id":"dt1","name":"A 드럼"},{"id":"dt2","name":"B 드럼"},{"id":"dt3","name":"C 드럼"},{"id":"dt4","name":"OPEN 드럼"},{"id":"dt5","name":"P.E. 드럼"},{"id":"dt6","name":"TOTE"}],"transactions":[{"id":"sample-tx-1","type":"in","date":"2026-08-31","drumTypeId":"dt4","qty":10,"party":"샘플거래처","partyId":"sample-party-1","handler":"홍길동","driverId":"sample-driver-1","note":"샘플 데이터입니다","ts":1788166597072}],"drivers":[{"id":"sample-driver-1","name":"홍길동","pin":"1111"},{"id":"sample-driver-2","name":"김철수","pin":"2222"}],"parties":[{"id":"sample-party-1","name":"샘플거래처"},{"id":"sample-party-2","name":"세척 후 재사용"}],"adminPassword":"admin1234"}</script>
+<script>
+  window.__gongdrumFirebaseReady = new Promise(function(resolve, reject){
+    window.__gongdrumFirebaseResolve = resolve;
+    window.__gongdrumFirebaseReject = reject;
+  });
+</script>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+  import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+
+  var firebaseConfig = {
+    apiKey: "AIzaSyCzbH8_xO1c0AYaNFNtdRYu1fWPnCpEVyA",
+    authDomain: "gongdrum-a3942.firebaseapp.com",
+    databaseURL: "https://gongdrum-a3942-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "gongdrum-a3942",
+    storageBucket: "gongdrum-a3942.firebasestorage.app",
+    messagingSenderId: "447493572696",
+    appId: "1:447493572696:web:5a89e38787cac173fba22d"
+  };
+
+  try {
+    var fbApp = initializeApp(firebaseConfig);
+    var db = getDatabase(fbApp);
+    var stateRef = ref(db, "state");
+    window.__gongdrumFirebaseResolve({
+      publish: function(state){ return set(stateRef, state); },
+      subscribe: function(cb){ onValue(stateRef, function(snap){ cb(snap.exists() ? snap.val() : null); }); }
+    });
+  } catch (e) {
+    window.__gongdrumFirebaseReject(e);
+  }
+</script>
 <script id="app-script">
 (function(){
   "use strict";
@@ -327,6 +359,8 @@
   /* ---------- state ---------- */
   var STATE = null;
   var artifact = null;
+  var firebaseApi = null;
+  var syncMode = "local"; // "claude" | "firebase" | "local"
   var hasSync = false;
   var isReadOnly = false;
   var session = null; // { role:"admin" } | { role:"driver", driverId, name }
@@ -491,12 +525,23 @@
 
   function publishState(newState, opts){
     opts = opts || {};
-    if (!hasSync){
+    if (syncMode === "local"){
       STATE = newState;
       ls_set(STATE_KEY, JSON.stringify(newState));
       render();
-      if (opts.flash) showToast(opts.flash + " · 이 기기에 저장돼요");
+      if (opts.flash) showToast(opts.flash + " · 이 기기에만 저장돼요");
       return Promise.resolve({ ok:true, local:true });
+    }
+    if (syncMode === "firebase"){
+      STATE = newState;
+      render();
+      return firebaseApi.publish(newState).then(function(){
+        if (opts.flash) showToast(opts.flash);
+        return { ok:true };
+      }, function(err){
+        showBanner((err && err.message) || "저장에 실패했어요. 인터넷 연결을 확인해주세요.");
+        return { ok:false };
+      });
     }
     if (opts.flash) ss_set(FLASH_KEY, opts.flash);
     if (opts.keepTab) ss_set(TAB_KEY, opts.keepTab);
@@ -513,7 +558,8 @@
         showBanner("읽기 전용 보기라 저장할 수 없어요.");
       } else if (code === "not_declared" || code === "capability_disabled" || code === "capability_removed"){
         hasSync = false;
-        showBanner("실시간 동기화를 사용할 수 없어요. 이 기기에 저장돼요.");
+        syncMode = "local";
+        showBanner("실시간 동기화를 사용할 수 없어요. 이 기기에만 저장돼요.");
         STATE = newState;
         ls_set(STATE_KEY, JSON.stringify(newState));
         render();
@@ -541,6 +587,14 @@
       adminPassword: "admin1234"
     };
   }
+  function normalizeState(s){
+    if (!s || !Array.isArray(s.drumTypes)) s = defaultState();
+    if (!Array.isArray(s.transactions)) s.transactions = [];
+    if (!Array.isArray(s.drivers)) s.drivers = [];
+    if (!Array.isArray(s.parties)) s.parties = [];
+    if (typeof s.adminPassword !== "string" || !s.adminPassword) s.adminPassword = "admin1234";
+    return s;
+  }
   function loadStateFromDOM(){
     var saved = ls_get(STATE_KEY);
     if (saved){
@@ -551,10 +605,7 @@
       try { STATE = JSON.parse(el.textContent); }
       catch(e){ STATE = defaultState(); }
     }
-    if (!STATE || !Array.isArray(STATE.drumTypes)) STATE = defaultState();
-    if (!Array.isArray(STATE.drivers)) STATE.drivers = [];
-    if (!Array.isArray(STATE.parties)) STATE.parties = [];
-    if (typeof STATE.adminPassword !== "string" || !STATE.adminPassword) STATE.adminPassword = "admin1234";
+    STATE = normalizeState(STATE);
   }
 
   /* ---------- render: shell ---------- */
@@ -1318,10 +1369,28 @@
       window.claude.use("artifact").then(function(ns){
         artifact = ns;
         hasSync = !!ns;
+        syncMode = hasSync ? "claude" : "local";
         render();
-      }).catch(function(){ hasSync = false; render(); });
+      }).catch(function(){ hasSync = false; syncMode = "local"; render(); });
+    } else if (window.__gongdrumFirebaseReady){
+      window.__gongdrumFirebaseReady.then(function(api){
+        firebaseApi = api;
+        hasSync = true;
+        syncMode = "firebase";
+        var firstSnapshot = true;
+        api.subscribe(function(remote){
+          if (remote){
+            STATE = normalizeState(remote);
+          } else if (firstSnapshot){
+            firebaseApi.publish(STATE);
+          }
+          firstSnapshot = false;
+          render();
+        });
+      }).catch(function(){ hasSync = false; syncMode = "local"; render(); });
     } else {
       hasSync = false;
+      syncMode = "local";
       render();
     }
   }
