@@ -458,10 +458,10 @@
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 (function () {
-  // EmailJS(emailjs.com)에서 발급받은 값으로 아래 세 개를 교체하면 주문 접수 시 이메일 알림이 자동 발송됩니다.
-  var EMAILJS_SERVICE_ID = "YOUR_SERVICE_ID";
-  var EMAILJS_TEMPLATE_ID = "YOUR_TEMPLATE_ID";
-  var EMAILJS_PUBLIC_KEY = "YOUR_PUBLIC_KEY";
+  // EmailJS(emailjs.com) 계정 값 — 주문 접수 시 이메일 알림을 자동 발송합니다.
+  var EMAILJS_SERVICE_ID = "service_dmxmimo";
+  var EMAILJS_TEMPLATE_ID = "template_256m3iu";
+  var EMAILJS_PUBLIC_KEY = "e7ryTRzoOAFORvgXk";
   var emailjsReady = window.emailjs && EMAILJS_PUBLIC_KEY !== "YOUR_PUBLIC_KEY";
   if (emailjsReady) {
     emailjs.init({ publicKey: EMAILJS_PUBLIC_KEY });
