@@ -161,6 +161,15 @@
   .summary-card .value small{font-size:15px;font-weight:500;opacity:.85;margin-left:3px;}
   .summary-card .meta{font-size:12px;opacity:.85;text-align:right;}
 
+  .report-table-wrap{overflow-x:auto;margin-bottom:4px;}
+  .report-table{width:100%;border-collapse:collapse;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:13.5px;}
+  .report-table th,.report-table td{padding:9px 10px;text-align:right;border-bottom:1px solid var(--border);white-space:nowrap;}
+  .report-table th:first-child,.report-table td:first-child{text-align:left;}
+  .report-table thead th{background:var(--surface-2);color:var(--ink-muted);font-weight:700;font-size:12px;}
+  .report-table tbody tr:last-child td{border-bottom:none;}
+  .report-table td.in{color:var(--in-color);}
+  .report-table td.out{color:var(--out-color);}
+
   .empty{
     text-align:center;color:var(--ink-muted);font-size:13.5px;
     padding:36px 16px;background:var(--surface);border:1px dashed var(--border);border-radius:var(--radius);
@@ -353,6 +362,7 @@
     window.__gongdrumFirebaseReject(e);
   }
 </script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script id="app-script">
 (function(){
   "use strict";
@@ -366,7 +376,7 @@
   var STATE_KEY = "gongdrum_state_v1";
   var OTHER_PARTY_ID = "__other__";
   var OTHER_DRUM_ID = "__other_drum__";
-  var ADMIN_TABS = ["dashboard","in","out","history","settings"];
+  var ADMIN_TABS = ["dashboard","in","out","history","report","settings"];
   var DRIVER_TABS = ["in","out","history"];
 
   /* ---------- state ---------- */
@@ -382,6 +392,7 @@
   var activeTab = "dashboard";
   var historyFilterType = "all";
   var historyFilterDrum = "all";
+  var reportDate = todayStr();
   var pendingDeleteTx = null;
   var pendingDeleteType = null;
   var pendingDeleteDriver = null;
@@ -422,7 +433,8 @@
     settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a1.7 1.7 0 0 0 .3 1.9l.06.07a2.1 2.1 0 1 1-3 3l-.07-.07a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5v.2a2.1 2.1 0 1 1-4.2 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.07.07a2.1 2.1 0 1 1-3-3l.07-.07a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1h-.2a2.1 2.1 0 1 1 0-4.2h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.07-.07a2.1 2.1 0 1 1 3-3l.07.07a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.5v-.2a2.1 2.1 0 1 1 4.2 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.07-.07a2.1 2.1 0 1 1 3 3l-.07.07a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1h.2a2.1 2.1 0 1 1 0 4.2h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
     warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 2.2 20.5h19.6z"/><path d="M12 9.5v5M12 17.3v.1"/></svg>',
-    logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4H5.5A1.5 1.5 0 0 0 4 5.5v13A1.5 1.5 0 0 0 5.5 20H9"/><path d="M20 12H10.5M20 12l-3.5-3.5M20 12l-3.5 3.5"/></svg>'
+    logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4H5.5A1.5 1.5 0 0 0 4 5.5v13A1.5 1.5 0 0 0 5.5 20H9"/><path d="M20 12H10.5M20 12l-3.5-3.5M20 12l-3.5 3.5"/></svg>',
+    report: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>'
   };
 
   /* ---------- utils ---------- */
@@ -660,6 +672,7 @@
 
     var content = "";
     if (activeTab === "settings" && isAdmin) content = renderSettings();
+    else if (activeTab === "report" && isAdmin) content = renderReport();
     else if (activeTab === "in") content = renderForm("in");
     else if (activeTab === "out") content = renderForm("out");
     else if (activeTab === "history") content = renderHistory();
@@ -683,12 +696,13 @@
     html += '</main>';
 
     if (activeTab !== "settings"){
-      var cols = isAdmin ? 4 : 3;
+      var cols = isAdmin ? 5 : 3;
       html += '<nav class="app-nav"><div class="app-nav-inner" style="grid-template-columns:repeat(' + cols + ',1fr)">';
       if (isAdmin) html += navBtn("dashboard", ICONS.dashboard, "대시보드");
       html += navBtn("in", ICONS.inbox, "입고");
       html += navBtn("out", ICONS.outbox, "출고");
       html += navBtn("history", ICONS.history, isAdmin ? "이력" : "내 기록");
+      if (isAdmin) html += navBtn("report", ICONS.report, "현황");
       html += '</div></nav>';
     }
 
@@ -833,6 +847,85 @@
       list.forEach(function(t){ html += renderTxRow(t, true); });
     }
     return html;
+  }
+
+  /* ---------- render: daily report ---------- */
+  function computeDailySummary(date){
+    return STATE.drumTypes.map(function(dt){
+      var inQty = 0, outQty = 0;
+      STATE.transactions.forEach(function(t){
+        if (t.date !== date || t.drumTypeId !== dt.id) return;
+        if (t.type === "in") inQty += t.qty; else outQty += t.qty;
+      });
+      return { id: dt.id, name: dt.name, in: inQty, out: outQty, net: inQty - outQty };
+    });
+  }
+
+  function renderReport(){
+    var summary = computeDailySummary(reportDate);
+    var totalIn = summary.reduce(function(s,r){ return s + r.in; }, 0);
+    var totalOut = summary.reduce(function(s,r){ return s + r.out; }, 0);
+    var hasActivity = summary.some(function(r){ return r.in > 0 || r.out > 0; });
+
+    var html = "";
+    html += '<div class="section-title">일일 입출고 현황</div>';
+    html += '<div class="field"><label for="f-reportDate">날짜</label>';
+    html += '<input class="input" id="f-reportDate" type="date" data-field="reportDate" value="' + esc(reportDate) + '"></div>';
+
+    html += '<div class="summary-card" style="margin-top:14px">';
+    html += '<div><div class="label">' + fmtDate(reportDate) + ' 입고</div><div class="value num">' + fmtNum(totalIn) + '<small>개</small></div></div>';
+    html += '<div class="meta">출고 <b class="num">' + fmtNum(totalOut) + '</b>개</div>';
+    html += '</div>';
+
+    html += '<div class="section-title">종류별 현황</div>';
+    if (!hasActivity){
+      html += '<div class="empty">이 날짜에 등록된 입출고 기록이 없어요.</div>';
+    } else {
+      html += '<div class="report-table-wrap"><table class="report-table"><thead><tr><th>드럼 종류</th><th>입고</th><th>출고</th><th>순증감</th></tr></thead><tbody>';
+      summary.forEach(function(r){
+        html += '<tr><td>' + esc(r.name) + '</td>';
+        html += '<td class="num in">' + (r.in ? "+" + fmtNum(r.in) : "-") + '</td>';
+        html += '<td class="num out">' + (r.out ? "-" + fmtNum(r.out) : "-") + '</td>';
+        html += '<td class="num">' + (r.net > 0 ? "+" : "") + fmtNum(r.net) + '</td></tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+
+    html += '<button type="button" class="btn primary" data-action="downloadExcel" style="margin-top:14px"' + (hasActivity ? "" : " disabled") + '>엑셀로 다운로드</button>';
+
+    html += '<div class="section-title">상세 기록</div>';
+    var dayTx = STATE.transactions.filter(function(t){ return t.date === reportDate; }).sort(function(a,b){ return b.ts - a.ts; });
+    if (dayTx.length === 0){
+      html += '<div class="empty">상세 기록이 없어요.</div>';
+    } else {
+      dayTx.forEach(function(t){ html += renderTxRow(t, false); });
+    }
+    return html;
+  }
+
+  function downloadExcel(){
+    if (typeof XLSX === "undefined"){
+      showToast("엑셀 기능을 불러오지 못했어요. 인터넷 연결을 확인해주세요.");
+      return;
+    }
+    var date = reportDate;
+    var summary = computeDailySummary(date);
+    var summaryRows = [["드럼 종류", "입고", "출고", "순증감"]];
+    summary.forEach(function(r){ summaryRows.push([r.name, r.in, r.out, r.net]); });
+
+    var dayTx = STATE.transactions.filter(function(t){ return t.date === date; }).sort(function(a,b){ return a.ts - b.ts; });
+    var detailRows = [["구분", "드럼 종류", "수량", "공급처/출고처", "담당자", "비고"]];
+    dayTx.forEach(function(t){
+      detailRows.push([
+        t.type === "in" ? "입고" : "출고",
+        drumName(t.drumTypeId), t.qty, t.party || "", t.handler || "", t.note || ""
+      ]);
+    });
+
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), "요약");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detailRows), "상세");
+    XLSX.writeFile(wb, "공드럼_입출고_" + date + ".xlsx");
   }
 
   /* ---------- render: in/out form ---------- */
@@ -1458,6 +1551,7 @@
     else if (action === "addItem"){ addItem(t.dataset.kind); }
     else if (action === "removeItem"){ removeItem(t.dataset.kind, parseInt(t.dataset.idx, 10)); }
     else if (action === "startNewEntry"){ startNewEntry(t.dataset.kind); }
+    else if (action === "downloadExcel"){ downloadExcel(); }
   }
   function onSubmit(e){
     var f = e.target.closest("form[data-action-submit]");
@@ -1471,6 +1565,7 @@
   function onInput(e){
     var el = e.target;
     if (!el.dataset || !el.dataset.field) return;
+    if (el.dataset.field === "reportDate"){ reportDate = el.value; render(); return; }
     if (el.dataset.field === "editType"){ editingTypeValue = el.value; return; }
     if (el.dataset.field === "addType"){ formDrafts.addType = el.value; scheduleDraftSave(); return; }
     if (el.dataset.field === "editParty"){ editingPartyValue[el.dataset.kind] = el.value; return; }
