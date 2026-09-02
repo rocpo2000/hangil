@@ -161,6 +161,15 @@
   .summary-card .value small{font-size:15px;font-weight:500;opacity:.85;margin-left:3px;}
   .summary-card .meta{font-size:12px;opacity:.85;text-align:right;}
 
+  .report-table-wrap{overflow-x:auto;margin-bottom:4px;}
+  .report-table{width:100%;border-collapse:collapse;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:13.5px;}
+  .report-table th,.report-table td{padding:9px 10px;text-align:right;border-bottom:1px solid var(--border);white-space:nowrap;}
+  .report-table th:first-child,.report-table td:first-child{text-align:left;}
+  .report-table thead th{background:var(--surface-2);color:var(--ink-muted);font-weight:700;font-size:12px;}
+  .report-table tbody tr:last-child td{border-bottom:none;}
+  .report-table td.in{color:var(--in-color);}
+  .report-table td.out{color:var(--out-color);}
+
   .empty{
     text-align:center;color:var(--ink-muted);font-size:13.5px;
     padding:36px 16px;background:var(--surface);border:1px dashed var(--border);border-radius:var(--radius);
@@ -243,6 +252,18 @@
   .stock-hint{font-size:12px;color:var(--ink-muted);margin-top:-2px;}
   .stock-hint b{color:var(--ink);}
 
+  .item-row{display:flex;gap:8px;align-items:flex-start;margin-bottom:10px;}
+  .item-row-main{flex:1;min-width:0;}
+  .item-row-qty{width:104px;flex:none;}
+  .item-del{
+    flex:none;width:36px;height:44px;margin-top:1px;
+    border:none;background:transparent;color:var(--ink-faint);cursor:pointer;
+    display:flex;align-items:center;justify-content:center;border-radius:6px;
+  }
+  .item-del:hover{color:var(--danger);background:var(--danger-soft);}
+
+  .result-meta{font-size:12.5px;color:var(--ink-muted);margin-bottom:12px;}
+
   .type-row{
     display:flex;align-items:center;gap:8px;
     background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);
@@ -308,7 +329,7 @@
 <body>
 <div id="app"></div>
 <div id="toast" class="toast" aria-live="polite"></div>
-<script type="application/json" id="state-data">{"drumTypes":[{"id":"dt1","name":"A 드럼"},{"id":"dt2","name":"B 드럼"},{"id":"dt3","name":"C 드럼"},{"id":"dt4","name":"OPEN 드럼"},{"id":"dt5","name":"P.E. 드럼"},{"id":"dt6","name":"TOTE"}],"transactions":[{"id":"sample-tx-1","type":"in","date":"2026-08-31","drumTypeId":"dt4","qty":10,"party":"샘플거래처","partyId":"sample-party-1","handler":"홍길동","driverId":"sample-driver-1","note":"샘플 데이터입니다","ts":1788166597072}],"drivers":[{"id":"sample-driver-1","name":"홍길동","pin":"1111"},{"id":"sample-driver-2","name":"김철수","pin":"2222"}],"parties":[{"id":"sample-party-1","name":"샘플거래처"},{"id":"sample-party-2","name":"세척 후 재사용"}],"adminPassword":"admin1234"}</script>
+<script type="application/json" id="state-data">{"drumTypes":[{"id":"dt1","name":"A 드럼"},{"id":"dt2","name":"B 드럼"},{"id":"dt3","name":"C 드럼"},{"id":"dt4","name":"OPEN 드럼"},{"id":"dt5","name":"P.E. 드럼"},{"id":"dt6","name":"TOTE"}],"transactions":[{"id":"sample-tx-1","type":"in","date":"2026-08-31","drumTypeId":"dt4","qty":10,"party":"샘플거래처","partyId":"sample-party-in-1","handler":"홍길동","driverId":"sample-driver-1","note":"샘플 데이터입니다","ts":1788166597072}],"drivers":[{"id":"sample-driver-1","name":"홍길동","pin":"1111"},{"id":"sample-driver-2","name":"김철수","pin":"2222"}],"inParties":[{"id":"sample-party-in-1","name":"샘플거래처"}],"outParties":[{"id":"sample-party-out-1","name":"세척 후 재사용"}],"adminPassword":"admin1234"}</script>
 <script>
   window.__gongdrumFirebaseReady = new Promise(function(resolve, reject){
     window.__gongdrumFirebaseResolve = resolve;
@@ -341,6 +362,7 @@
     window.__gongdrumFirebaseReject(e);
   }
 </script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script id="app-script">
 (function(){
   "use strict";
@@ -353,7 +375,8 @@
   var SESSION_KEY = "gongdrum_session_v1";
   var STATE_KEY = "gongdrum_state_v1";
   var OTHER_PARTY_ID = "__other__";
-  var ADMIN_TABS = ["dashboard","in","out","history","settings"];
+  var OTHER_DRUM_ID = "__other_drum__";
+  var ADMIN_TABS = ["dashboard","in","out","history","report","settings"];
   var DRIVER_TABS = ["in","out","history"];
 
   /* ---------- state ---------- */
@@ -369,17 +392,23 @@
   var activeTab = "dashboard";
   var historyFilterType = "all";
   var historyFilterDrum = "all";
+  var reportDate = todayStr();
   var pendingDeleteTx = null;
   var pendingDeleteType = null;
   var pendingDeleteDriver = null;
-  var pendingDeleteParty = null;
+  var pendingDeleteParty = { "in": null, "out": null };
   var submitting = { "in": false, "out": false };
-  var formErrors = { "in": {}, "out": {}, addType: "", addParty: "", addDriver: "", adminPw: "" };
+  var formView = { "in": "form", "out": "form" }; // "form" | "result"
+  var lastResult = { "in": null, "out": null };
+  var formErrors = {
+    "in": { items: [{}] }, "out": { items: [{}] },
+    addType: "", addParty: { "in": "", "out": "" }, addDriver: "", adminPw: ""
+  };
   var formDrafts = {
-    "in": { date: "", drumTypeId: "", qty: "", partyId: "", party: "", handler: "", note: "" },
-    "out": { date: "", drumTypeId: "", qty: "", partyId: "", party: "", handler: "", note: "" },
+    "in": { date: "", items: [{ drumTypeId: "", drumTypeOther: "", qty: "" }], partyId: "", party: "", handler: "", note: "" },
+    "out": { date: "", items: [{ drumTypeId: "", drumTypeOther: "", qty: "" }], partyId: "", party: "", handler: "", note: "" },
     addType: "",
-    addParty: "",
+    addParty: { "in": "", "out": "" },
     login: { driverId: "", pin: "", adminPw: "" },
     addDriver: { name: "", pin: "" },
     adminPw: { value: "" }
@@ -389,8 +418,8 @@
   var editingDriverId = null;
   var editingDriverName = "";
   var editingDriverPin = "";
-  var editingPartyId = null;
-  var editingPartyValue = "";
+  var editingPartyId = { "in": null, "out": null };
+  var editingPartyValue = { "in": "", "out": "" };
   var toastTimer = null;
   var draftSaveTimer = null;
 
@@ -404,7 +433,8 @@
     settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a1.7 1.7 0 0 0 .3 1.9l.06.07a2.1 2.1 0 1 1-3 3l-.07-.07a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5v.2a2.1 2.1 0 1 1-4.2 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.07.07a2.1 2.1 0 1 1-3-3l.07-.07a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1h-.2a2.1 2.1 0 1 1 0-4.2h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.07-.07a2.1 2.1 0 1 1 3-3l.07.07a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.5v-.2a2.1 2.1 0 1 1 4.2 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.07-.07a2.1 2.1 0 1 1 3 3l-.07.07a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1h.2a2.1 2.1 0 1 1 0 4.2h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
     warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 2.2 20.5h19.6z"/><path d="M12 9.5v5M12 17.3v.1"/></svg>',
-    logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4H5.5A1.5 1.5 0 0 0 4 5.5v13A1.5 1.5 0 0 0 5.5 20H9"/><path d="M20 12H10.5M20 12l-3.5-3.5M20 12l-3.5 3.5"/></svg>'
+    logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4H5.5A1.5 1.5 0 0 0 4 5.5v13A1.5 1.5 0 0 0 5.5 20H9"/><path d="M20 12H10.5M20 12l-3.5-3.5M20 12l-3.5 3.5"/></svg>',
+    report: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>'
   };
 
   /* ---------- utils ---------- */
@@ -448,8 +478,9 @@
   function typeInUse(state, id){
     return state.transactions.some(function(t){ return t.drumTypeId === id; });
   }
-  function partyInUse(state, id){
-    return state.transactions.some(function(t){ return t.partyId === id; });
+  function partiesKey(kind){ return kind === "in" ? "inParties" : "outParties"; }
+  function partyInUse(state, kind, id){
+    return state.transactions.some(function(t){ return t.type === kind && t.partyId === id; });
   }
 
   /* ---------- persistence helpers (per-viewer, not shared) ---------- */
@@ -473,8 +504,17 @@
       var d = JSON.parse(raw);
       if (d && d["in"]) formDrafts["in"] = Object.assign(formDrafts["in"], d["in"]);
       if (d && d["out"]) formDrafts["out"] = Object.assign(formDrafts["out"], d["out"]);
+      ["in","out"].forEach(function(k){
+        if (!Array.isArray(formDrafts[k].items) || !formDrafts[k].items.length){
+          formDrafts[k].items = [{ drumTypeId: "", drumTypeOther: "", qty: "" }];
+        }
+        formErrors[k] = { items: formDrafts[k].items.map(function(){ return {}; }) };
+      });
       if (d && typeof d.addType === "string") formDrafts.addType = d.addType;
-      if (d && typeof d.addParty === "string") formDrafts.addParty = d.addParty;
+      if (d && d.addParty && typeof d.addParty === "object"){
+        if (typeof d.addParty["in"] === "string") formDrafts.addParty["in"] = d.addParty["in"];
+        if (typeof d.addParty["out"] === "string") formDrafts.addParty["out"] = d.addParty["out"];
+      }
     } catch(e){}
   }
   function saveLastHandler(name){
@@ -583,7 +623,8 @@
       ],
       transactions: [],
       drivers: [],
-      parties: [],
+      inParties: [],
+      outParties: [],
       adminPassword: "admin1234"
     };
   }
@@ -591,7 +632,13 @@
     if (!s || !Array.isArray(s.drumTypes)) s = defaultState();
     if (!Array.isArray(s.transactions)) s.transactions = [];
     if (!Array.isArray(s.drivers)) s.drivers = [];
-    if (!Array.isArray(s.parties)) s.parties = [];
+    if (!Array.isArray(s.inParties) || !Array.isArray(s.outParties)){
+      // migrate from the older single shared "parties" list, if present
+      var legacy = Array.isArray(s.parties) ? s.parties : [];
+      if (!Array.isArray(s.inParties)) s.inParties = legacy.slice();
+      if (!Array.isArray(s.outParties)) s.outParties = legacy.slice();
+    }
+    delete s.parties;
     if (typeof s.adminPassword !== "string" || !s.adminPassword) s.adminPassword = "admin1234";
     return s;
   }
@@ -625,6 +672,7 @@
 
     var content = "";
     if (activeTab === "settings" && isAdmin) content = renderSettings();
+    else if (activeTab === "report" && isAdmin) content = renderReport();
     else if (activeTab === "in") content = renderForm("in");
     else if (activeTab === "out") content = renderForm("out");
     else if (activeTab === "history") content = renderHistory();
@@ -648,12 +696,13 @@
     html += '</main>';
 
     if (activeTab !== "settings"){
-      var cols = isAdmin ? 4 : 3;
+      var cols = isAdmin ? 5 : 3;
       html += '<nav class="app-nav"><div class="app-nav-inner" style="grid-template-columns:repeat(' + cols + ',1fr)">';
       if (isAdmin) html += navBtn("dashboard", ICONS.dashboard, "대시보드");
       html += navBtn("in", ICONS.inbox, "입고");
       html += navBtn("out", ICONS.outbox, "출고");
       html += navBtn("history", ICONS.history, isAdmin ? "이력" : "내 기록");
+      if (isAdmin) html += navBtn("report", ICONS.report, "현황");
       html += '</div></nav>';
     }
 
@@ -800,11 +849,92 @@
     return html;
   }
 
+  /* ---------- render: daily report ---------- */
+  function computeDailySummary(date){
+    return STATE.drumTypes.map(function(dt){
+      var inQty = 0, outQty = 0;
+      STATE.transactions.forEach(function(t){
+        if (t.date !== date || t.drumTypeId !== dt.id) return;
+        if (t.type === "in") inQty += t.qty; else outQty += t.qty;
+      });
+      return { id: dt.id, name: dt.name, in: inQty, out: outQty, net: inQty - outQty };
+    });
+  }
+
+  function renderReport(){
+    var summary = computeDailySummary(reportDate);
+    var totalIn = summary.reduce(function(s,r){ return s + r.in; }, 0);
+    var totalOut = summary.reduce(function(s,r){ return s + r.out; }, 0);
+    var hasActivity = summary.some(function(r){ return r.in > 0 || r.out > 0; });
+
+    var html = "";
+    html += '<div class="section-title">일일 입출고 현황</div>';
+    html += '<div class="field"><label for="f-reportDate">날짜</label>';
+    html += '<input class="input" id="f-reportDate" type="date" data-field="reportDate" value="' + esc(reportDate) + '"></div>';
+
+    html += '<div class="summary-card" style="margin-top:14px">';
+    html += '<div><div class="label">' + fmtDate(reportDate) + ' 입고</div><div class="value num">' + fmtNum(totalIn) + '<small>개</small></div></div>';
+    html += '<div class="meta">출고 <b class="num">' + fmtNum(totalOut) + '</b>개</div>';
+    html += '</div>';
+
+    html += '<div class="section-title">종류별 현황</div>';
+    if (!hasActivity){
+      html += '<div class="empty">이 날짜에 등록된 입출고 기록이 없어요.</div>';
+    } else {
+      html += '<div class="report-table-wrap"><table class="report-table"><thead><tr><th>드럼 종류</th><th>입고</th><th>출고</th><th>순증감</th></tr></thead><tbody>';
+      summary.forEach(function(r){
+        html += '<tr><td>' + esc(r.name) + '</td>';
+        html += '<td class="num in">' + (r.in ? "+" + fmtNum(r.in) : "-") + '</td>';
+        html += '<td class="num out">' + (r.out ? "-" + fmtNum(r.out) : "-") + '</td>';
+        html += '<td class="num">' + (r.net > 0 ? "+" : "") + fmtNum(r.net) + '</td></tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+
+    html += '<button type="button" class="btn primary" data-action="downloadExcel" style="margin-top:14px"' + (hasActivity ? "" : " disabled") + '>엑셀로 다운로드</button>';
+
+    html += '<div class="section-title">상세 기록</div>';
+    var dayTx = STATE.transactions.filter(function(t){ return t.date === reportDate; }).sort(function(a,b){ return b.ts - a.ts; });
+    if (dayTx.length === 0){
+      html += '<div class="empty">상세 기록이 없어요.</div>';
+    } else {
+      dayTx.forEach(function(t){ html += renderTxRow(t, false); });
+    }
+    return html;
+  }
+
+  function downloadExcel(){
+    if (typeof XLSX === "undefined"){
+      showToast("엑셀 기능을 불러오지 못했어요. 인터넷 연결을 확인해주세요.");
+      return;
+    }
+    var date = reportDate;
+    var summary = computeDailySummary(date);
+    var summaryRows = [["드럼 종류", "입고", "출고", "순증감"]];
+    summary.forEach(function(r){ summaryRows.push([r.name, r.in, r.out, r.net]); });
+
+    var dayTx = STATE.transactions.filter(function(t){ return t.date === date; }).sort(function(a,b){ return a.ts - b.ts; });
+    var detailRows = [["구분", "드럼 종류", "수량", "공급처/출고처", "담당자", "비고"]];
+    dayTx.forEach(function(t){
+      detailRows.push([
+        t.type === "in" ? "입고" : "출고",
+        drumName(t.drumTypeId), t.qty, t.party || "", t.handler || "", t.note || ""
+      ]);
+    });
+
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), "요약");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detailRows), "상세");
+    XLSX.writeFile(wb, "공드럼_입출고_" + date + ".xlsx");
+  }
+
   /* ---------- render: in/out form ---------- */
   function renderForm(kind){
+    if (formView[kind] === "result" && lastResult[kind]) return renderResult(kind);
+
     var isIn = kind === "in";
     var d = formDrafts[kind];
-    var err = formErrors[kind] || {};
+    var err = formErrors[kind] || { items: [] };
     var stock = computeStock(STATE);
     var partyLabel = isIn ? "공급처" : "용도 / 출고처";
     var partyPh = isIn ? "예: 대성상사" : "예: 세척 후 재사용";
@@ -821,35 +951,50 @@
 
     html += field("date","날짜","date", d.date || todayStr(), err.date);
 
-    // drum type select
-    html += '<div class="field' + (err.drumTypeId?" has-err":"") + '">';
-    html += '<label for="f-drumType">드럼 종류</label>';
-    html += '<select class="input" id="f-drumType" data-field="drumTypeId">';
-    html += '<option value="">선택해주세요</option>';
-    STATE.drumTypes.forEach(function(dt){
-      var sel = d.drumTypeId === dt.id ? " selected" : "";
-      html += '<option value="' + dt.id + '"' + sel + '>' + esc(dt.name) + '</option>';
+    // drum type + qty rows (one or more)
+    html += '<div class="field"><label>드럼 종류·수량</label></div>';
+    d.items.forEach(function(item, idx){
+      var itemErr = (err.items && err.items[idx]) || {};
+      html += '<div class="item-row">';
+      html += '<div class="item-row-main">';
+      html += '<div class="field' + (itemErr.drumTypeId?" has-err":"") + '">';
+      html += '<select class="input" data-field="itemDrumTypeId" data-idx="' + idx + '">';
+      html += '<option value="">드럼 종류 선택</option>';
+      STATE.drumTypes.forEach(function(dt){
+        var sel = item.drumTypeId === dt.id ? " selected" : "";
+        html += '<option value="' + dt.id + '"' + sel + '>' + esc(dt.name) + '</option>';
+      });
+      html += '<option value="' + OTHER_DRUM_ID + '"' + (item.drumTypeId === OTHER_DRUM_ID ? " selected" : "") + '>기타 (직접 입력)</option>';
+      html += '</select>';
+      if (itemErr.drumTypeId) html += '<div class="err">' + esc(itemErr.drumTypeId) + '</div>';
+      if (item.drumTypeId === OTHER_DRUM_ID){
+        html += '<input class="input" style="margin-top:6px" data-field="itemDrumTypeOther" data-idx="' + idx + '" placeholder="예: 100L 철드럼" value="' + esc(item.drumTypeOther) + '">';
+        if (itemErr.drumTypeOther) html += '<div class="err">' + esc(itemErr.drumTypeOther) + '</div>';
+      }
+      if (!isIn && item.drumTypeId && item.drumTypeId !== OTHER_DRUM_ID){
+        html += '<div class="stock-hint">현재 재고 <b class="num">' + fmtNum(stock[item.drumTypeId] || 0) + '개</b></div>';
+      }
+      html += '</div>';
+      html += '</div>';
+      html += '<div class="item-row-qty">';
+      html += '<div class="field' + (itemErr.qty?" has-err":"") + '">';
+      html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="1" step="1" placeholder="0" data-field="itemQty" data-idx="' + idx + '" value="' + esc(item.qty) + '"><span class="unit">개</span></div>';
+      if (itemErr.qty) html += '<div class="err">' + esc(itemErr.qty) + '</div>';
+      html += '</div>';
+      html += '</div>';
+      if (d.items.length > 1){
+        html += '<button type="button" class="item-del" data-action="removeItem" data-kind="' + kind + '" data-idx="' + idx + '" aria-label="이 항목 삭제">' + iconWrap(ICONS.close, 15) + '</button>';
+      }
+      html += '</div>';
     });
-    html += '</select>';
-    if (!isIn && d.drumTypeId){
-      html += '<div class="stock-hint">현재 재고 <b class="num">' + fmtNum(stock[d.drumTypeId] || 0) + '개</b></div>';
-    }
-    if (err.drumTypeId) html += '<div class="err">' + esc(err.drumTypeId) + '</div>';
-    html += '</div>';
-
-    // qty
-    html += '<div class="field' + (err.qty?" has-err":"") + '">';
-    html += '<label for="f-qty">수량</label>';
-    html += '<div class="qty-wrap"><input class="input" id="f-qty" type="number" inputmode="numeric" min="1" step="1" placeholder="0" data-field="qty" value="' + esc(d.qty) + '"><span class="unit">개</span></div>';
-    if (err.qty) html += '<div class="err">' + esc(err.qty) + '</div>';
-    html += '</div>';
+    html += '<button type="button" class="btn ghost small" data-action="addItem" data-kind="' + kind + '" style="margin-bottom:14px">+ 드럼 종류 추가</button>';
 
     // party select
     html += '<div class="field' + (err.partyId?" has-err":"") + '">';
     html += '<label for="f-partyId">' + esc(partyLabel) + '</label>';
     html += '<select class="input" id="f-partyId" data-field="partyId">';
     html += '<option value="">선택해주세요</option>';
-    STATE.parties.forEach(function(p){
+    STATE[partiesKey(kind)].forEach(function(p){
       var sel = d.partyId === p.id ? " selected" : "";
       html += '<option value="' + p.id + '"' + sel + '>' + esc(p.name) + '</option>';
     });
@@ -875,12 +1020,65 @@
     return html;
   }
 
+  /* ---------- render: registration result ---------- */
+  function renderResult(kind){
+    var r = lastResult[kind];
+    if (!r) return "";
+    var isIn = kind === "in";
+    var html = "";
+    html += '<div class="section-title">' + (isIn?"입고 등록 완료":"출고 등록 완료") + '</div>';
+    html += '<div class="result-meta">' + fmtDate(r.date) + ' · ' + esc(r.partyName || "-") + ' · ' + esc(r.handlerName || "-") + '</div>';
+    if (r.note) html += '<div class="tx-note" style="margin-bottom:10px">' + esc(r.note) + '</div>';
+    r.items.forEach(function(it){
+      html += '<div class="tx-row">';
+      html += '<span class="pill ' + (isIn?"in":"out") + '">' + (isIn ? "입고" : "출고") + '</span>';
+      html += '<div class="tx-main"><div class="tx-top"><span class="tx-drum">' + esc(it.name) + '</span>';
+      html += '<span class="tx-qty ' + (isIn?"in":"out") + ' num">' + (isIn?"+":"-") + fmtNum(it.qty) + '개</span></div></div>';
+      html += '</div>';
+    });
+    html += '<button type="button" class="btn primary" data-action="startNewEntry" data-kind="' + kind + '" style="margin-top:16px">새로 등록하기</button>';
+    html += '<button type="button" class="btn ghost" data-action="switchTab" data-tab="history" style="margin-top:8px">등록 내역 보기</button>';
+    return html;
+  }
+
   function field(name,label,type,value,error,placeholder){
     var html = '<div class="field' + (error?" has-err":"") + '">';
     html += '<label for="f-' + name + '">' + esc(label) + '</label>';
     html += '<input class="input" id="f-' + name + '" type="' + type + '" data-field="' + name + '" value="' + esc(value) + '"' + (placeholder?(' placeholder="'+esc(placeholder)+'"'):"") + '>';
     if (error) html += '<div class="err">' + esc(error) + '</div>';
     return html + '</div>';
+  }
+
+  function renderPartySection(kind, title, addPlaceholder, inUseTitle){
+    var key = partiesKey(kind);
+    var list = STATE[key];
+    var html = '<div class="section-title">' + esc(title) + '</div>';
+    if (list.length === 0){
+      html += '<div class="empty">등록된 항목이 없어요. 아래에서 추가해주세요.<br>추가하기 전에는 입고·출고 등록 시 "기타"로만 입력할 수 있어요.</div>';
+    } else {
+      list.forEach(function(p){
+        var inUse = partyInUse(STATE, kind, p.id);
+        var pendingCls = pendingDeleteParty[kind] === p.id ? " pending" : "";
+        html += '<div class="type-row">';
+        if (editingPartyId[kind] === p.id){
+          html += '<input class="input" style="flex:1" data-field="editParty" data-kind="' + kind + '" value="' + esc(editingPartyValue[kind]) + '">';
+          html += '<button type="button" data-action="savePartyEdit" data-kind="' + kind + '" data-id="' + p.id + '">저장</button>';
+          html += '<button type="button" data-action="cancelPartyEdit" data-kind="' + kind + '">취소</button>';
+        } else {
+          html += '<span class="tname">' + esc(p.name) + '</span>';
+          if (inUse) html += '<span class="tcount">사용 중</span>';
+          html += '<button type="button" data-action="startPartyEdit" data-kind="' + kind + '" data-id="' + p.id + '" aria-label="이름 수정">수정</button>';
+          html += '<button type="button" class="del' + pendingCls + '" data-action="deleteParty" data-kind="' + kind + '" data-id="' + p.id + '"' + (inUse?(' disabled title="'+esc(inUseTitle)+'"'):"") + '>' + (pendingDeleteParty[kind]===p.id ? "정말?" : "삭제") + '</button>';
+        }
+        html += '</div>';
+      });
+    }
+    html += '<div class="add-type-row" data-form="_addParty">';
+    html += '<input class="input" placeholder="' + esc(addPlaceholder) + '" data-field="addParty" data-kind="' + kind + '" value="' + esc(formDrafts.addParty[kind]) + '">';
+    html += '<button type="button" class="btn primary small" data-action="addParty" data-kind="' + kind + '">추가</button>';
+    html += '</div>';
+    if (formErrors.addParty[kind]) html += '<div class="err" style="margin-top:6px">' + esc(formErrors.addParty[kind]) + '</div>';
+    return html;
   }
 
   /* ---------- render: settings ---------- */
@@ -918,33 +1116,8 @@
     html += '</div>';
     if (formErrors.addType) html += '<div class="err" style="margin-top:6px">' + esc(formErrors.addType) + '</div>';
 
-    html += '<div class="section-title">공급처 관리</div>';
-    if (STATE.parties.length === 0){
-      html += '<div class="empty">등록된 공급처가 없어요. 아래에서 추가해주세요.<br>추가하기 전에는 입고·출고 등록 시 "기타"로만 입력할 수 있어요.</div>';
-    } else {
-      STATE.parties.forEach(function(p){
-        var inUse = partyInUse(STATE, p.id);
-        var pendingCls = pendingDeleteParty === p.id ? " pending" : "";
-        html += '<div class="type-row">';
-        if (editingPartyId === p.id){
-          html += '<input class="input" style="flex:1" data-field="editParty" value="' + esc(editingPartyValue) + '">';
-          html += '<button type="button" data-action="savePartyEdit" data-id="' + p.id + '">저장</button>';
-          html += '<button type="button" data-action="cancelPartyEdit">취소</button>';
-        } else {
-          html += '<span class="tname">' + esc(p.name) + '</span>';
-          if (inUse) html += '<span class="tcount">사용 중</span>';
-          html += '<button type="button" data-action="startPartyEdit" data-id="' + p.id + '" aria-label="이름 수정">수정</button>';
-          html += '<button type="button" class="del' + pendingCls + '" data-action="deleteParty" data-id="' + p.id + '"' + (inUse?" disabled title=\"사용 중인 공급처는 삭제할 수 없어요\"":"") + '>' + (pendingDeleteParty===p.id ? "정말?" : "삭제") + '</button>';
-        }
-        html += '</div>';
-      });
-    }
-
-    html += '<div class="add-type-row" data-form="_addParty">';
-    html += '<input class="input" placeholder="새 공급처 이름 (예: 대성상사)" data-field="addParty" value="' + esc(formDrafts.addParty) + '">';
-    html += '<button type="button" class="btn primary small" data-action="addParty">추가</button>';
-    html += '</div>';
-    if (formErrors.addParty) html += '<div class="err" style="margin-top:6px">' + esc(formErrors.addParty) + '</div>';
+    html += renderPartySection("in", "입고 공급처 관리", "새 공급처 이름 (예: 대성상사)", "사용 중인 공급처는 삭제할 수 없어요");
+    html += renderPartySection("out", "출고처 관리 (용도·출고처)", "새 출고처 이름 (예: 세척 후 재사용)", "사용 중인 출고처는 삭제할 수 없어요");
 
     html += '<div class="section-title">기사 관리 (이름·PIN)</div>';
     if (STATE.drivers.length === 0){
@@ -993,13 +1166,14 @@
     if (!session) return;
     if (allowedTabs().indexOf(tab) === -1) return;
     activeTab = tab;
+    if (tab === "in" || tab === "out") formView[tab] = "form";
     pendingDeleteTx = null;
     pendingDeleteType = null;
     pendingDeleteDriver = null;
-    pendingDeleteParty = null;
+    pendingDeleteParty = { "in": null, "out": null };
     editingTypeId = null;
     editingDriverId = null;
-    editingPartyId = null;
+    editingPartyId = { "in": null, "out": null };
     render();
   }
 
@@ -1045,22 +1219,71 @@
     ls_del(SESSION_KEY);
     activeTab = "dashboard";
     loginError = "";
+    formView = { "in": "form", "out": "form" };
+    lastResult = { "in": null, "out": null };
     render();
   }
 
   function setHistoryType(v){ historyFilterType = v; render(); }
   function setHistoryDrum(v){ historyFilterDrum = v; render(); }
 
+  // resolves an item's chosen drum type against a (possibly already-extended)
+  // drumTypes list; returns { id, drumTypes } where drumTypes includes a newly
+  // created entry when the typed name didn't already exist.
+  function resolveDrumType(item, drumTypes){
+    if (item.drumTypeId !== OTHER_DRUM_ID) return { id: item.drumTypeId, drumTypes: drumTypes };
+    var typeName = (item.drumTypeOther || "").trim();
+    var match = drumTypes.filter(function(t){ return t.name === typeName; })[0];
+    if (match) return { id: match.id, drumTypes: drumTypes };
+    var newType = { id: genId(), name: typeName };
+    return { id: newType.id, drumTypes: drumTypes.concat([newType]) };
+  }
+
+  function entryHasErrors(errors){
+    if (errors.date || errors.partyId || errors.party || errors.handler) return true;
+    return errors.items.some(function(e){ return e && Object.keys(e).length > 0; });
+  }
+
   function validateEntry(kind, d){
-    var errors = {};
+    var errors = { items: [] };
     if (!d.date) errors.date = "날짜를 선택해주세요";
-    if (!d.drumTypeId) errors.drumTypeId = "드럼 종류를 선택해주세요";
-    var qty = parseInt(d.qty, 10);
-    if (!qty || qty <= 0) errors.qty = "수량을 입력해주세요";
-    else if (kind === "out"){
-      var stock = computeStock(STATE)[d.drumTypeId] || 0;
-      if (qty > stock) errors.qty = "재고보다 많아요 (현재 " + fmtNum(stock) + "개)";
+
+    var stock = computeStock(STATE);
+    var outTotals = {}; // resolved drumTypeId (or a per-name placeholder) -> summed qty across rows
+    d.items.forEach(function(item, idx){
+      var itemErr = {};
+      if (!item.drumTypeId) itemErr.drumTypeId = "드럼 종류를 선택해주세요";
+      else if (item.drumTypeId === OTHER_DRUM_ID && (!item.drumTypeOther || !item.drumTypeOther.trim())) itemErr.drumTypeOther = "드럼 종류를 입력해주세요";
+      var qty = parseInt(item.qty, 10);
+      if (!qty || qty <= 0) itemErr.qty = "수량을 입력해주세요";
+      errors.items[idx] = itemErr;
+
+      if (kind === "out" && !itemErr.drumTypeId && !itemErr.drumTypeOther && !itemErr.qty){
+        var stockId = item.drumTypeId;
+        if (stockId === OTHER_DRUM_ID){
+          var existingType = STATE.drumTypes.filter(function(t){ return t.name === item.drumTypeOther.trim(); })[0];
+          stockId = existingType ? existingType.id : ("__new__" + item.drumTypeOther.trim());
+        }
+        outTotals[stockId] = (outTotals[stockId] || 0) + qty;
+      }
+    });
+
+    if (kind === "out"){
+      Object.keys(outTotals).forEach(function(id){
+        var avail = id.indexOf("__new__") === 0 ? 0 : (stock[id] || 0);
+        if (outTotals[id] <= avail) return;
+        d.items.forEach(function(item, idx){
+          if (errors.items[idx].qty) return; // already flagged for its own reason
+          var thisId = item.drumTypeId;
+          if (thisId === OTHER_DRUM_ID){
+            var existingType = STATE.drumTypes.filter(function(t){ return t.name === (item.drumTypeOther || "").trim(); })[0];
+            thisId = existingType ? existingType.id : ("__new__" + (item.drumTypeOther || "").trim());
+          }
+          if (thisId === id) errors.items[idx].qty = "재고보다 많아요 (현재 " + fmtNum(avail) + "개)";
+        });
+      });
     }
+
     if (!d.partyId) errors.partyId = "공급처를 선택해주세요";
     else if (d.partyId === OTHER_PARTY_ID && (!d.party || !d.party.trim())) errors.party = kind === "in" ? "공급처를 입력해주세요" : "용도나 출고처를 입력해주세요";
     var isDriver = session && session.role === "driver";
@@ -1074,41 +1297,78 @@
     if (!d.date) d.date = todayStr();
     var errors = validateEntry(kind, d);
     formErrors[kind] = errors;
-    if (Object.keys(errors).length){ render(); return; }
+    if (entryHasErrors(errors)){ render(); return; }
 
     var isDriver = session.role === "driver";
-    var qty = parseInt(d.qty, 10);
     var handlerName = isDriver ? session.name : d.handler.trim();
     var partyId, partyName;
     if (d.partyId === OTHER_PARTY_ID){
       partyId = null;
       partyName = d.party.trim();
     } else {
-      var pMatch = STATE.parties.filter(function(p){ return p.id === d.partyId; })[0];
+      var pMatch = STATE[partiesKey(kind)].filter(function(p){ return p.id === d.partyId; })[0];
       partyId = d.partyId;
       partyName = pMatch ? pMatch.name : "";
     }
-    var tx = {
-      id: genId(), type: kind, date: d.date, drumTypeId: d.drumTypeId,
-      qty: qty, party: partyName, partyId: partyId, handler: handlerName,
-      driverId: isDriver ? session.driverId : null,
-      note: (d.note || "").trim(), ts: Date.now()
-    };
-    var newState = Object.assign({}, STATE, { transactions: STATE.transactions.concat([tx]) });
-    if (!isDriver) saveLastHandler(tx.handler);
+
+    var newDrumTypes = STATE.drumTypes;
+    var resultItems = [];
+    var txs = [];
+    var ts0 = Date.now();
+    d.items.forEach(function(item, i){
+      var resolved = resolveDrumType(item, newDrumTypes);
+      newDrumTypes = resolved.drumTypes;
+      var qty = parseInt(item.qty, 10);
+      var dtObj = newDrumTypes.filter(function(t){ return t.id === resolved.id; })[0];
+      resultItems.push({ name: dtObj ? dtObj.name : "", qty: qty });
+      txs.push({
+        id: genId(), type: kind, date: d.date, drumTypeId: resolved.id,
+        qty: qty, party: partyName, partyId: partyId, handler: handlerName,
+        driverId: isDriver ? session.driverId : null,
+        note: (d.note || "").trim(), ts: ts0 + i
+      });
+    });
+    var newState = Object.assign({}, STATE, { drumTypes: newDrumTypes, transactions: STATE.transactions.concat(txs) });
+    if (!isDriver) saveLastHandler(handlerName);
 
     submitting[kind] = true; render();
     publishState(newState, { flash: (kind==="in"?"입고를 등록했어요":"출고를 등록했어요"), keepTab: kind }).then(function(res){
       submitting[kind] = false;
       if (res.ok){
-        formDrafts[kind] = { date: todayStr(), drumTypeId: d.drumTypeId, qty: "", partyId: d.partyId, party: d.party, handler: d.handler, note: "" };
-        formErrors[kind] = {};
+        lastResult[kind] = {
+          date: d.date, partyName: partyName, handlerName: handlerName,
+          note: (d.note || "").trim(), items: resultItems
+        };
+        formView[kind] = "result";
+        formDrafts[kind] = {
+          date: todayStr(),
+          items: [{ drumTypeId: "", drumTypeOther: "", qty: "" }],
+          partyId: d.partyId, party: (d.partyId === OTHER_PARTY_ID ? "" : d.party),
+          handler: d.handler, note: ""
+        };
+        formErrors[kind] = { items: [{}] };
         ss_set(DRAFT_KEY, JSON.stringify(formDrafts));
-        if (res.local) render();
+        render();
       } else {
         render();
       }
     });
+  }
+
+  function addItem(kind){
+    formDrafts[kind].items.push({ drumTypeId: "", drumTypeOther: "", qty: "" });
+    if (formErrors[kind] && formErrors[kind].items) formErrors[kind].items.push({});
+    render();
+  }
+  function removeItem(kind, idx){
+    if (formDrafts[kind].items.length <= 1) return;
+    formDrafts[kind].items.splice(idx, 1);
+    if (formErrors[kind] && formErrors[kind].items) formErrors[kind].items.splice(idx, 1);
+    render();
+  }
+  function startNewEntry(kind){
+    formView[kind] = "form";
+    render();
   }
 
   function deleteTx(id){
@@ -1166,44 +1426,48 @@
     publishState(newState, { flash: "드럼 종류를 삭제했어요", keepTab: "settings" }).then(function(){ render(); });
   }
 
-  function addParty(){
+  function addParty(kind){
     if (isReadOnly) return;
-    var name = (formDrafts.addParty || "").trim();
-    if (!name){ formErrors.addParty = "공급처 이름을 입력해주세요"; render(); return; }
-    if (STATE.parties.some(function(p){ return p.name === name; })){
-      formErrors.addParty = "이미 있는 이름이에요";
+    var key = partiesKey(kind);
+    var name = (formDrafts.addParty[kind] || "").trim();
+    if (!name){ formErrors.addParty[kind] = "이름을 입력해주세요"; render(); return; }
+    if (STATE[key].some(function(p){ return p.name === name; })){
+      formErrors.addParty[kind] = "이미 있는 이름이에요";
       render();
       return;
     }
-    formErrors.addParty = "";
+    formErrors.addParty[kind] = "";
     var newParty = { id: genId(), name: name };
-    var newState = Object.assign({}, STATE, { parties: STATE.parties.concat([newParty]) });
-    formDrafts.addParty = "";
-    publishState(newState, { flash: "공급처를 추가했어요", keepTab: "settings" }).then(function(){ render(); });
+    var patch = {}; patch[key] = STATE[key].concat([newParty]);
+    var newState = Object.assign({}, STATE, patch);
+    formDrafts.addParty[kind] = "";
+    publishState(newState, { flash: (kind==="in"?"입고 공급처를 추가했어요":"출고처를 추가했어요"), keepTab: "settings" }).then(function(){ render(); });
   }
-  function startPartyEdit(id){
-    var p = STATE.parties.filter(function(x){ return x.id === id; })[0];
+  function startPartyEdit(kind, id){
+    var p = STATE[partiesKey(kind)].filter(function(x){ return x.id === id; })[0];
     if (!p) return;
-    editingPartyId = id;
-    editingPartyValue = p.name;
+    editingPartyId[kind] = id;
+    editingPartyValue[kind] = p.name;
     render();
   }
-  function cancelPartyEdit(){ editingPartyId = null; render(); }
-  function savePartyEdit(id){
-    var name = (editingPartyValue || "").trim();
+  function cancelPartyEdit(kind){ editingPartyId[kind] = null; render(); }
+  function savePartyEdit(kind, id){
+    var name = (editingPartyValue[kind] || "").trim();
     if (!name) return;
-    var newState = Object.assign({}, STATE, {
-      parties: STATE.parties.map(function(p){ return p.id === id ? Object.assign({}, p, { name: name }) : p; })
-    });
-    editingPartyId = null;
-    publishState(newState, { flash: "공급처 이름을 수정했어요", keepTab: "settings" }).then(function(){ render(); });
+    var key = partiesKey(kind);
+    var patch = {}; patch[key] = STATE[key].map(function(p){ return p.id === id ? Object.assign({}, p, { name: name }) : p; });
+    var newState = Object.assign({}, STATE, patch);
+    editingPartyId[kind] = null;
+    publishState(newState, { flash: "이름을 수정했어요", keepTab: "settings" }).then(function(){ render(); });
   }
-  function deleteParty(id){
-    if (isReadOnly || partyInUse(STATE, id)) return;
-    if (pendingDeleteParty !== id){ pendingDeleteParty = id; render(); return; }
-    pendingDeleteParty = null;
-    var newState = Object.assign({}, STATE, { parties: STATE.parties.filter(function(p){ return p.id !== id; }) });
-    publishState(newState, { flash: "공급처를 삭제했어요", keepTab: "settings" }).then(function(){ render(); });
+  function deleteParty(kind, id){
+    if (isReadOnly || partyInUse(STATE, kind, id)) return;
+    if (pendingDeleteParty[kind] !== id){ pendingDeleteParty[kind] = id; render(); return; }
+    pendingDeleteParty[kind] = null;
+    var key = partiesKey(kind);
+    var patch = {}; patch[key] = STATE[key].filter(function(p){ return p.id !== id; });
+    var newState = Object.assign({}, STATE, patch);
+    publishState(newState, { flash: (kind==="in"?"입고 공급처를 삭제했어요":"출고처를 삭제했어요"), keepTab: "settings" }).then(function(){ render(); });
   }
 
   function addDriver(){
@@ -1271,11 +1535,11 @@
     else if (action === "cancelTypeEdit"){ cancelTypeEdit(); }
     else if (action === "saveTypeEdit"){ saveTypeEdit(t.dataset.id); }
     else if (action === "deleteType"){ if (!t.disabled) deleteType(t.dataset.id); }
-    else if (action === "addParty"){ addParty(); }
-    else if (action === "startPartyEdit"){ startPartyEdit(t.dataset.id); }
-    else if (action === "cancelPartyEdit"){ cancelPartyEdit(); }
-    else if (action === "savePartyEdit"){ savePartyEdit(t.dataset.id); }
-    else if (action === "deleteParty"){ if (!t.disabled) deleteParty(t.dataset.id); }
+    else if (action === "addParty"){ addParty(t.dataset.kind); }
+    else if (action === "startPartyEdit"){ startPartyEdit(t.dataset.kind, t.dataset.id); }
+    else if (action === "cancelPartyEdit"){ cancelPartyEdit(t.dataset.kind); }
+    else if (action === "savePartyEdit"){ savePartyEdit(t.dataset.kind, t.dataset.id); }
+    else if (action === "deleteParty"){ if (!t.disabled) deleteParty(t.dataset.kind, t.dataset.id); }
     else if (action === "setLoginMode"){ setLoginMode(t.dataset.value); }
     else if (action === "logout"){ logout(); }
     else if (action === "addDriver"){ addDriver(); }
@@ -1284,6 +1548,10 @@
     else if (action === "saveDriverEdit"){ saveDriverEdit(t.dataset.id); }
     else if (action === "deleteDriver"){ deleteDriver(t.dataset.id); }
     else if (action === "changeAdminPw"){ changeAdminPassword(); }
+    else if (action === "addItem"){ addItem(t.dataset.kind); }
+    else if (action === "removeItem"){ removeItem(t.dataset.kind, parseInt(t.dataset.idx, 10)); }
+    else if (action === "startNewEntry"){ startNewEntry(t.dataset.kind); }
+    else if (action === "downloadExcel"){ downloadExcel(); }
   }
   function onSubmit(e){
     var f = e.target.closest("form[data-action-submit]");
@@ -1297,12 +1565,25 @@
   function onInput(e){
     var el = e.target;
     if (!el.dataset || !el.dataset.field) return;
+    if (el.dataset.field === "reportDate"){ reportDate = el.value; render(); return; }
     if (el.dataset.field === "editType"){ editingTypeValue = el.value; return; }
     if (el.dataset.field === "addType"){ formDrafts.addType = el.value; scheduleDraftSave(); return; }
-    if (el.dataset.field === "editParty"){ editingPartyValue = el.value; return; }
-    if (el.dataset.field === "addParty"){ formDrafts.addParty = el.value; scheduleDraftSave(); return; }
+    if (el.dataset.field === "editParty"){ editingPartyValue[el.dataset.kind] = el.value; return; }
+    if (el.dataset.field === "addParty"){ formDrafts.addParty[el.dataset.kind] = el.value; scheduleDraftSave(); return; }
     if (el.dataset.field === "editDriverName"){ editingDriverName = el.value; return; }
     if (el.dataset.field === "editDriverPin"){ editingDriverPin = el.value; return; }
+    if (el.dataset.field === "itemDrumTypeId" || el.dataset.field === "itemDrumTypeOther" || el.dataset.field === "itemQty"){
+      var itemForm = el.closest("[data-form]");
+      if (!itemForm) return;
+      var itemKind = itemForm.dataset.form;
+      var idx = parseInt(el.dataset.idx, 10);
+      var items = formDrafts[itemKind] && formDrafts[itemKind].items;
+      if (!items || !items[idx]) return;
+      var itemKey = el.dataset.field === "itemDrumTypeId" ? "drumTypeId" : el.dataset.field === "itemDrumTypeOther" ? "drumTypeOther" : "qty";
+      items[idx][itemKey] = el.value;
+      scheduleDraftSave();
+      return;
+    }
     var form = el.closest("[data-form]");
     if (form){
       var kind = form.dataset.form;
@@ -1319,7 +1600,7 @@
     var el = e.target;
     if (el.dataset && el.dataset.action === "setHistoryDrum"){ setHistoryDrum(el.value); return; }
     onInput(e);
-    if (el.dataset && el.dataset.field === "partyId"){ render(); }
+    if (el.dataset && (el.dataset.field === "partyId" || el.dataset.field === "itemDrumTypeId")){ render(); }
   }
 
   /* ---------- init ---------- */
