@@ -434,8 +434,39 @@
   </footer>
 </div>
 
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+  import { getDatabase, ref, push, set } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+
+  var firebaseConfig = {
+    apiKey: "AIzaSyCzbH8_xO1c0AYaNFNtdRYu1fWPnCpEVyA",
+    authDomain: "gongdrum-a3942.firebaseapp.com",
+    databaseURL: "https://gongdrum-a3942-default-rtdb.asia-southeast1.firebasedatabase.app",
+    storageBucket: "gongdrum-a3942.firebasestorage.app"
+  };
+
+  try {
+    var fbApp = initializeApp(firebaseConfig);
+    var db = getDatabase(fbApp);
+    window.__hangilSaveOrder = function (order) {
+      return set(push(ref(db, "hangil_orders")), order);
+    };
+  } catch (e) {
+    window.__hangilSaveOrder = function () { return Promise.reject(e); };
+  }
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 (function () {
+  // EmailJS(emailjs.com)에서 발급받은 값으로 아래 세 개를 교체하면 주문 접수 시 이메일 알림이 자동 발송됩니다.
+  var EMAILJS_SERVICE_ID = "YOUR_SERVICE_ID";
+  var EMAILJS_TEMPLATE_ID = "YOUR_TEMPLATE_ID";
+  var EMAILJS_PUBLIC_KEY = "YOUR_PUBLIC_KEY";
+  var emailjsReady = window.emailjs && EMAILJS_PUBLIC_KEY !== "YOUR_PUBLIC_KEY";
+  if (emailjsReady) {
+    emailjs.init({ publicKey: EMAILJS_PUBLIC_KEY });
+  }
+
   var itemNames = ["재생 스틸드럼 200L", "OPEN 드럼 200L", "PE 드럼", "폐유기용제 처리"];
   var state = { mode: "buy", item: 0 };
 
@@ -480,6 +511,28 @@
     resultMsg.textContent = person + "님, " + kind + " 요청이 접수되었습니다. " +
       itemNames[state.item] + " " + qty + "본 기준으로 담당자가 " + phone + "(으)로 연락드립니다.";
     resultBox.hidden = false;
+
+    var order = {
+      mode: kind,
+      item: itemNames[state.item],
+      company: company,
+      person: person,
+      phone: phone,
+      email: byId("orderEmail").value.trim(),
+      qty: qty,
+      due: byId("orderDue").value,
+      addr: byId("orderAddr").value.trim(),
+      memo: byId("orderMemo").value.trim(),
+      submittedAt: new Date().toISOString()
+    };
+
+    if (window.__hangilSaveOrder) {
+      window.__hangilSaveOrder(order).catch(function (e) { console.error("주문 저장 실패", e); });
+    }
+    if (emailjsReady) {
+      emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, order)
+        .catch(function (e) { console.error("이메일 전송 실패", e); });
+    }
   };
 
   document.querySelectorAll("[data-hover]").forEach(function (el) {

@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>주문 현황 | 한길주식회사</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Noto Sans KR', sans-serif; background: #F5F7FA; color: #12263A; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 20px 32px; background: #0B57A4; color: #F5F7FA; }
+  header h1 { font-size: 19px; margin: 0; font-weight: 700; }
+  header a { color: #CBDEF2; font-size: 14px; }
+  main { padding: 32px; max-width: 1400px; margin: 0 auto; }
+  #gate { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60vh; gap: 16px; }
+  #gate input { font-size: 16px; padding: 12px 16px; border-radius: 12px; border: 1px solid #DCE3EB; width: 240px; text-align: center; }
+  #gate button { font-size: 15px; font-weight: 700; padding: 12px 28px; border-radius: 999px; border: none; background: #0B57A4; color: #F5F7FA; cursor: pointer; }
+  #gate .err { color: #C0392B; font-size: 14px; min-height: 18px; }
+  table { width: 100%; border-collapse: collapse; background: #FFFFFF; border-radius: 16px; overflow: hidden; font-size: 14px; }
+  th, td { padding: 12px 14px; text-align: left; border-bottom: 1px solid #E9EEF5; white-space: nowrap; }
+  th { background: #E9EEF5; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; letter-spacing: 0.06em; color: #4A5563; }
+  td.memo { white-space: normal; max-width: 260px; color: #4A5563; }
+  tr:last-child td { border-bottom: none; }
+  #empty { padding: 60px 0; text-align: center; color: #7A8898; }
+  #count { color: #7A8898; font-size: 14px; margin-bottom: 14px; }
+  .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 700; }
+  .badge.buy { background: #E4EDF8; color: #0B57A4; }
+  .badge.collect { background: #FBEEDC; color: #A15C1B; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <div style="font-size: 20px; font-weight: 900;">한길주식회사 · 주문 현황</div>
+  <input type="password" id="pwInput" placeholder="관리자 비밀번호" autofocus>
+  <button type="button" id="pwSubmit">확인</button>
+  <div class="err" id="pwErr"></div>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <h1>한길주식회사 · 온라인 주문 현황</h1>
+    <a href="../index.html">← 홈페이지로</a>
+  </header>
+  <main>
+    <div id="count"></div>
+    <div id="empty" hidden>아직 접수된 주문이 없습니다.</div>
+    <div style="overflow-x: auto;">
+      <table id="table" hidden>
+        <thead>
+          <tr>
+            <th>접수일시</th>
+            <th>구분</th>
+            <th>회사명</th>
+            <th>담당자</th>
+            <th>연락처</th>
+            <th>이메일</th>
+            <th>품목</th>
+            <th>수량</th>
+            <th>희망납기</th>
+            <th>주소</th>
+            <th>요청사항</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </main>
+</div>
+
+<script>
+  // 이 비밀번호를 바꾸려면 아래 문자열을 수정하세요. (클라이언트 측 확인용 — 강력한 보안은 아닙니다.)
+  var ADMIN_PASSWORD = "admin1234";
+
+  document.getElementById("pwSubmit").addEventListener("click", tryLogin);
+  document.getElementById("pwInput").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") tryLogin();
+  });
+
+  function tryLogin() {
+    var val = document.getElementById("pwInput").value;
+    if (val === ADMIN_PASSWORD) {
+      sessionStorage.setItem("hangilOrdersAuthed", "1");
+      showApp();
+    } else {
+      document.getElementById("pwErr").textContent = "비밀번호가 올바르지 않습니다.";
+    }
+  }
+
+  function showApp() {
+    document.getElementById("gate").hidden = true;
+    document.getElementById("app").hidden = false;
+    startListening();
+  }
+
+  if (sessionStorage.getItem("hangilOrdersAuthed") === "1") {
+    showApp();
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function fmtDate(iso) {
+    if (!iso) return "";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return esc(iso);
+    function pad(n) { return String(n).padStart(2, "0"); }
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " +
+      pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+
+  function startListening() {
+    import("https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js").then(function (appMod) {
+      return Promise.all([
+        appMod,
+        import("https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js")
+      ]);
+    }).then(function (mods) {
+      var initializeApp = mods[0].initializeApp;
+      var dbMod = mods[1];
+
+      var firebaseConfig = {
+        apiKey: "AIzaSyCzbH8_xO1c0AYaNFNtdRYu1fWPnCpEVyA",
+        authDomain: "gongdrum-a3942.firebaseapp.com",
+        databaseURL: "https://gongdrum-a3942-default-rtdb.asia-southeast1.firebasedatabase.app",
+        storageBucket: "gongdrum-a3942.firebasestorage.app"
+      };
+
+      var fbApp = initializeApp(firebaseConfig);
+      var db = dbMod.getDatabase(fbApp);
+      var ordersRef = dbMod.ref(db, "hangil_orders");
+
+      dbMod.onValue(ordersRef, function (snapshot) {
+        var val = snapshot.val() || {};
+        var orders = Object.keys(val).map(function (key) {
+          var o = val[key];
+          o._key = key;
+          return o;
+        });
+        orders.sort(function (a, b) {
+          return String(b.submittedAt || "").localeCompare(String(a.submittedAt || ""));
+        });
+        render(orders);
+      }, function (err) {
+        document.getElementById("count").textContent = "주문 데이터를 불러오지 못했습니다: " + err.message;
+      });
+    }).catch(function (err) {
+      document.getElementById("count").textContent = "Firebase 연결 오류: " + err.message;
+    });
+  }
+
+  function render(orders) {
+    var countEl = document.getElementById("count");
+    var emptyEl = document.getElementById("empty");
+    var tableEl = document.getElementById("table");
+    var tbody = document.getElementById("tbody");
+
+    countEl.textContent = "총 " + orders.length + "건";
+
+    if (!orders.length) {
+      emptyEl.hidden = false;
+      tableEl.hidden = true;
+      return;
+    }
+    emptyEl.hidden = true;
+    tableEl.hidden = false;
+
+    tbody.innerHTML = orders.map(function (o) {
+      var badgeClass = o.mode === "공드럼 회수" ? "collect" : "buy";
+      return "<tr>" +
+        "<td>" + esc(fmtDate(o.submittedAt)) + "</td>" +
+        "<td><span class=\"badge " + badgeClass + "\">" + esc(o.mode) + "</span></td>" +
+        "<td>" + esc(o.company) + "</td>" +
+        "<td>" + esc(o.person) + "</td>" +
+        "<td>" + esc(o.phone) + "</td>" +
+        "<td>" + esc(o.email) + "</td>" +
+        "<td>" + esc(o.item) + "</td>" +
+        "<td>" + esc(o.qty) + "</td>" +
+        "<td>" + esc(o.due) + "</td>" +
+        "<td>" + esc(o.addr) + "</td>" +
+        "<td class=\"memo\">" + esc(o.memo) + "</td>" +
+        "</tr>";
+    }).join("");
+  }
+</script>
+</body>
+</html>
