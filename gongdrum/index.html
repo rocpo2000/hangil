@@ -170,6 +170,17 @@
   .report-table td.in{color:var(--in-color);}
   .report-table td.out{color:var(--out-color);}
 
+  .party-card{
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+    box-shadow:var(--shadow);padding:12px;margin-bottom:10px;
+  }
+  .party-card-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:8px;}
+  .party-card-name{font-weight:700;font-size:14.5px;}
+  .party-card-total{font-size:12.5px;color:var(--ink-muted);flex:none;}
+  .party-card .report-table{border:none;box-shadow:none;}
+  .party-card .report-table thead th{background:transparent;padding-left:0;}
+  .party-card .report-table td:first-child, .party-card .report-table th:first-child{padding-left:0;}
+
   .empty{
     text-align:center;color:var(--ink-muted);font-size:13.5px;
     padding:36px 16px;background:var(--surface);border:1px dashed var(--border);border-radius:var(--radius);
@@ -861,11 +872,31 @@
     });
   }
 
+  // groups a day's transactions by 업체명 (party), each with its own line
+  // items (drum type, qty, handler) and an in/out/total for that company.
+  function computePartySummary(date){
+    var order = [];
+    var byName = {};
+    STATE.transactions.forEach(function(t){
+      if (t.date !== date) return;
+      var key = t.party || "(미지정)";
+      if (!byName[key]){ byName[key] = { name: key, in: 0, out: 0, items: [] }; order.push(key); }
+      byName[key][t.type] += t.qty;
+      byName[key].items.push(t);
+    });
+    return order.map(function(key){
+      var g = byName[key];
+      g.items.sort(function(a,b){ return a.ts - b.ts; });
+      return { name: g.name, in: g.in, out: g.out, total: g.in + g.out, items: g.items };
+    }).sort(function(a,b){ return b.total - a.total; });
+  }
+
   function renderReport(){
     var summary = computeDailySummary(reportDate);
     var totalIn = summary.reduce(function(s,r){ return s + r.in; }, 0);
     var totalOut = summary.reduce(function(s,r){ return s + r.out; }, 0);
-    var hasActivity = summary.some(function(r){ return r.in > 0 || r.out > 0; });
+    var partyGroups = computePartySummary(reportDate);
+    var hasActivity = partyGroups.length > 0;
 
     var html = "";
     html += '<div class="section-title">일일 입출고 현황</div>';
@@ -876,6 +907,28 @@
     html += '<div><div class="label">' + fmtDate(reportDate) + ' 입고</div><div class="value num">' + fmtNum(totalIn) + '<small>개</small></div></div>';
     html += '<div class="meta">출고 <b class="num">' + fmtNum(totalOut) + '</b>개</div>';
     html += '</div>';
+
+    html += '<button type="button" class="btn primary" data-action="downloadExcel" style="margin-top:14px"' + (hasActivity ? "" : " disabled") + '>엑셀로 다운로드</button>';
+
+    html += '<div class="section-title">업체별 현황</div>';
+    if (!hasActivity){
+      html += '<div class="empty">이 날짜에 등록된 입출고 기록이 없어요.</div>';
+    } else {
+      partyGroups.forEach(function(g){
+        html += '<div class="party-card">';
+        html += '<div class="party-card-head"><span class="party-card-name">' + esc(g.name) + '</span>';
+        html += '<span class="party-card-total num">합계 ' + fmtNum(g.total) + '개</span></div>';
+        html += '<div class="report-table-wrap"><table class="report-table"><thead><tr><th>구분</th><th>드럼 종류</th><th>수량</th><th>담당자</th></tr></thead><tbody>';
+        g.items.forEach(function(t){
+          var isIn = t.type === "in";
+          html += '<tr><td>' + (isIn ? "입고" : "출고") + '</td><td>' + esc(drumName(t.drumTypeId)) + '</td>';
+          html += '<td class="num ' + (isIn?"in":"out") + '">' + (isIn?"+":"-") + fmtNum(t.qty) + '</td>';
+          html += '<td>' + esc(t.handler || "-") + '</td></tr>';
+        });
+        html += '</tbody></table></div>';
+        html += '</div>';
+      });
+    }
 
     html += '<div class="section-title">종류별 현황</div>';
     if (!hasActivity){
@@ -890,16 +943,6 @@
       });
       html += '</tbody></table></div>';
     }
-
-    html += '<button type="button" class="btn primary" data-action="downloadExcel" style="margin-top:14px"' + (hasActivity ? "" : " disabled") + '>엑셀로 다운로드</button>';
-
-    html += '<div class="section-title">상세 기록</div>';
-    var dayTx = STATE.transactions.filter(function(t){ return t.date === reportDate; }).sort(function(a,b){ return b.ts - a.ts; });
-    if (dayTx.length === 0){
-      html += '<div class="empty">상세 기록이 없어요.</div>';
-    } else {
-      dayTx.forEach(function(t){ html += renderTxRow(t, false); });
-    }
     return html;
   }
 
@@ -909,22 +952,29 @@
       return;
     }
     var date = reportDate;
+    var partyGroups = computePartySummary(date);
+
+    var partyRows = [["업체명", "입고", "출고", "합계"]];
+    partyGroups.forEach(function(g){ partyRows.push([g.name, g.in, g.out, g.total]); });
+
+    var detailRows = [["업체명", "구분", "드럼 종류", "수량", "담당자", "비고"]];
+    partyGroups.forEach(function(g){
+      g.items.forEach(function(t){
+        detailRows.push([
+          g.name, t.type === "in" ? "입고" : "출고",
+          drumName(t.drumTypeId), t.qty, t.handler || "", t.note || ""
+        ]);
+      });
+    });
+
     var summary = computeDailySummary(date);
     var summaryRows = [["드럼 종류", "입고", "출고", "순증감"]];
     summary.forEach(function(r){ summaryRows.push([r.name, r.in, r.out, r.net]); });
 
-    var dayTx = STATE.transactions.filter(function(t){ return t.date === date; }).sort(function(a,b){ return a.ts - b.ts; });
-    var detailRows = [["구분", "드럼 종류", "수량", "공급처/출고처", "담당자", "비고"]];
-    dayTx.forEach(function(t){
-      detailRows.push([
-        t.type === "in" ? "입고" : "출고",
-        drumName(t.drumTypeId), t.qty, t.party || "", t.handler || "", t.note || ""
-      ]);
-    });
-
     var wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), "요약");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(partyRows), "업체별 요약");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detailRows), "상세");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), "종류별 요약");
     XLSX.writeFile(wb, "공드럼_입출고_" + date + ".xlsx");
   }
 
