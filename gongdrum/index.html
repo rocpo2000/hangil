@@ -353,6 +353,7 @@
   var SESSION_KEY = "gongdrum_session_v1";
   var STATE_KEY = "gongdrum_state_v1";
   var OTHER_PARTY_ID = "__other__";
+  var OTHER_DRUM_ID = "__other_drum__";
   var ADMIN_TABS = ["dashboard","in","out","history","settings"];
   var DRIVER_TABS = ["in","out","history"];
 
@@ -376,8 +377,8 @@
   var submitting = { "in": false, "out": false };
   var formErrors = { "in": {}, "out": {}, addType: "", addParty: { "in": "", "out": "" }, addDriver: "", adminPw: "" };
   var formDrafts = {
-    "in": { date: "", drumTypeId: "", qty: "", partyId: "", party: "", handler: "", note: "" },
-    "out": { date: "", drumTypeId: "", qty: "", partyId: "", party: "", handler: "", note: "" },
+    "in": { date: "", drumTypeId: "", drumTypeOther: "", qty: "", partyId: "", party: "", handler: "", note: "" },
+    "out": { date: "", drumTypeId: "", drumTypeOther: "", qty: "", partyId: "", party: "", handler: "", note: "" },
     addType: "",
     addParty: { "in": "", "out": "" },
     login: { driverId: "", pin: "", adminPw: "" },
@@ -841,12 +842,16 @@
       var sel = d.drumTypeId === dt.id ? " selected" : "";
       html += '<option value="' + dt.id + '"' + sel + '>' + esc(dt.name) + '</option>';
     });
+    html += '<option value="' + OTHER_DRUM_ID + '"' + (d.drumTypeId === OTHER_DRUM_ID ? " selected" : "") + '>기타 (직접 입력)</option>';
     html += '</select>';
-    if (!isIn && d.drumTypeId){
+    if (!isIn && d.drumTypeId && d.drumTypeId !== OTHER_DRUM_ID){
       html += '<div class="stock-hint">현재 재고 <b class="num">' + fmtNum(stock[d.drumTypeId] || 0) + '개</b></div>';
     }
     if (err.drumTypeId) html += '<div class="err">' + esc(err.drumTypeId) + '</div>';
     html += '</div>';
+    if (d.drumTypeId === OTHER_DRUM_ID){
+      html += field("drumTypeOther", "드럼 종류 직접 입력", "text", d.drumTypeOther, err.drumTypeOther, "예: 100L 철드럼");
+    }
 
     // qty
     html += '<div class="field' + (err.qty?" has-err":"") + '">';
@@ -1073,10 +1078,16 @@
     var errors = {};
     if (!d.date) errors.date = "날짜를 선택해주세요";
     if (!d.drumTypeId) errors.drumTypeId = "드럼 종류를 선택해주세요";
+    else if (d.drumTypeId === OTHER_DRUM_ID && (!d.drumTypeOther || !d.drumTypeOther.trim())) errors.drumTypeOther = "드럼 종류를 입력해주세요";
     var qty = parseInt(d.qty, 10);
     if (!qty || qty <= 0) errors.qty = "수량을 입력해주세요";
-    else if (kind === "out"){
-      var stock = computeStock(STATE)[d.drumTypeId] || 0;
+    else if (kind === "out" && d.drumTypeId){
+      var stockId = d.drumTypeId;
+      if (stockId === OTHER_DRUM_ID){
+        var existingType = STATE.drumTypes.filter(function(t){ return t.name === (d.drumTypeOther || "").trim(); })[0];
+        stockId = existingType ? existingType.id : null;
+      }
+      var stock = stockId ? (computeStock(STATE)[stockId] || 0) : 0;
       if (qty > stock) errors.qty = "재고보다 많아요 (현재 " + fmtNum(stock) + "개)";
     }
     if (!d.partyId) errors.partyId = "공급처를 선택해주세요";
@@ -1106,20 +1117,33 @@
       partyId = d.partyId;
       partyName = pMatch ? pMatch.name : "";
     }
+    var drumTypeId = d.drumTypeId;
+    var newDrumTypes = STATE.drumTypes;
+    if (drumTypeId === OTHER_DRUM_ID){
+      var typeName = d.drumTypeOther.trim();
+      var dtMatch = STATE.drumTypes.filter(function(t){ return t.name === typeName; })[0];
+      if (dtMatch){
+        drumTypeId = dtMatch.id;
+      } else {
+        var newDrumType = { id: genId(), name: typeName };
+        newDrumTypes = STATE.drumTypes.concat([newDrumType]);
+        drumTypeId = newDrumType.id;
+      }
+    }
     var tx = {
-      id: genId(), type: kind, date: d.date, drumTypeId: d.drumTypeId,
+      id: genId(), type: kind, date: d.date, drumTypeId: drumTypeId,
       qty: qty, party: partyName, partyId: partyId, handler: handlerName,
       driverId: isDriver ? session.driverId : null,
       note: (d.note || "").trim(), ts: Date.now()
     };
-    var newState = Object.assign({}, STATE, { transactions: STATE.transactions.concat([tx]) });
+    var newState = Object.assign({}, STATE, { drumTypes: newDrumTypes, transactions: STATE.transactions.concat([tx]) });
     if (!isDriver) saveLastHandler(tx.handler);
 
     submitting[kind] = true; render();
     publishState(newState, { flash: (kind==="in"?"입고를 등록했어요":"출고를 등록했어요"), keepTab: kind }).then(function(res){
       submitting[kind] = false;
       if (res.ok){
-        formDrafts[kind] = { date: todayStr(), drumTypeId: d.drumTypeId, qty: "", partyId: d.partyId, party: d.party, handler: d.handler, note: "" };
+        formDrafts[kind] = { date: todayStr(), drumTypeId: drumTypeId, drumTypeOther: "", qty: "", partyId: d.partyId, party: d.party, handler: d.handler, note: "" };
         formErrors[kind] = {};
         ss_set(DRAFT_KEY, JSON.stringify(formDrafts));
         if (res.local) render();
@@ -1341,7 +1365,7 @@
     var el = e.target;
     if (el.dataset && el.dataset.action === "setHistoryDrum"){ setHistoryDrum(el.value); return; }
     onInput(e);
-    if (el.dataset && el.dataset.field === "partyId"){ render(); }
+    if (el.dataset && (el.dataset.field === "partyId" || el.dataset.field === "drumTypeId")){ render(); }
   }
 
   /* ---------- init ---------- */
