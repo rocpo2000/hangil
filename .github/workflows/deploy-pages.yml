@@ -1,10 +1,11 @@
 name: Deploy to GitHub Pages
 
 on:
-  push:
-    branches:
-      - main
-      - claude/gongdrum-app-publish-s5uaxe
+  # This branch only holds the gongdrum app itself (no homepage/admin files),
+  # so it must not auto-deploy to Pages root — that would overwrite the
+  # merged site published from claude/hangil-webpage-deploy-ojbij9, which
+  # carries the homepage plus this app under /gongdrum/. Use workflow_dispatch
+  # here if a manual one-off deploy of just this branch is ever needed.
   workflow_dispatch:
 
 permissions:
