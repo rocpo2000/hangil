@@ -308,7 +308,7 @@
 <body>
 <div id="app"></div>
 <div id="toast" class="toast" aria-live="polite"></div>
-<script type="application/json" id="state-data">{"drumTypes":[{"id":"dt1","name":"A 드럼"},{"id":"dt2","name":"B 드럼"},{"id":"dt3","name":"C 드럼"},{"id":"dt4","name":"OPEN 드럼"},{"id":"dt5","name":"P.E. 드럼"},{"id":"dt6","name":"TOTE"}],"transactions":[{"id":"sample-tx-1","type":"in","date":"2026-08-31","drumTypeId":"dt4","qty":10,"party":"샘플거래처","partyId":"sample-party-1","handler":"홍길동","driverId":"sample-driver-1","note":"샘플 데이터입니다","ts":1788166597072}],"drivers":[{"id":"sample-driver-1","name":"홍길동","pin":"1111"},{"id":"sample-driver-2","name":"김철수","pin":"2222"}],"parties":[{"id":"sample-party-1","name":"샘플거래처"},{"id":"sample-party-2","name":"세척 후 재사용"}],"adminPassword":"admin1234"}</script>
+<script type="application/json" id="state-data">{"drumTypes":[{"id":"dt1","name":"A 드럼"},{"id":"dt2","name":"B 드럼"},{"id":"dt3","name":"C 드럼"},{"id":"dt4","name":"OPEN 드럼"},{"id":"dt5","name":"P.E. 드럼"},{"id":"dt6","name":"TOTE"}],"transactions":[{"id":"sample-tx-1","type":"in","date":"2026-08-31","drumTypeId":"dt4","qty":10,"party":"샘플거래처","partyId":"sample-party-in-1","handler":"홍길동","driverId":"sample-driver-1","note":"샘플 데이터입니다","ts":1788166597072}],"drivers":[{"id":"sample-driver-1","name":"홍길동","pin":"1111"},{"id":"sample-driver-2","name":"김철수","pin":"2222"}],"inParties":[{"id":"sample-party-in-1","name":"샘플거래처"}],"outParties":[{"id":"sample-party-out-1","name":"세척 후 재사용"}],"adminPassword":"admin1234"}</script>
 <script>
   window.__gongdrumFirebaseReady = new Promise(function(resolve, reject){
     window.__gongdrumFirebaseResolve = resolve;
@@ -372,14 +372,14 @@
   var pendingDeleteTx = null;
   var pendingDeleteType = null;
   var pendingDeleteDriver = null;
-  var pendingDeleteParty = null;
+  var pendingDeleteParty = { "in": null, "out": null };
   var submitting = { "in": false, "out": false };
-  var formErrors = { "in": {}, "out": {}, addType: "", addParty: "", addDriver: "", adminPw: "" };
+  var formErrors = { "in": {}, "out": {}, addType: "", addParty: { "in": "", "out": "" }, addDriver: "", adminPw: "" };
   var formDrafts = {
     "in": { date: "", drumTypeId: "", qty: "", partyId: "", party: "", handler: "", note: "" },
     "out": { date: "", drumTypeId: "", qty: "", partyId: "", party: "", handler: "", note: "" },
     addType: "",
-    addParty: "",
+    addParty: { "in": "", "out": "" },
     login: { driverId: "", pin: "", adminPw: "" },
     addDriver: { name: "", pin: "" },
     adminPw: { value: "" }
@@ -389,8 +389,8 @@
   var editingDriverId = null;
   var editingDriverName = "";
   var editingDriverPin = "";
-  var editingPartyId = null;
-  var editingPartyValue = "";
+  var editingPartyId = { "in": null, "out": null };
+  var editingPartyValue = { "in": "", "out": "" };
   var toastTimer = null;
   var draftSaveTimer = null;
 
@@ -448,8 +448,9 @@
   function typeInUse(state, id){
     return state.transactions.some(function(t){ return t.drumTypeId === id; });
   }
-  function partyInUse(state, id){
-    return state.transactions.some(function(t){ return t.partyId === id; });
+  function partiesKey(kind){ return kind === "in" ? "inParties" : "outParties"; }
+  function partyInUse(state, kind, id){
+    return state.transactions.some(function(t){ return t.type === kind && t.partyId === id; });
   }
 
   /* ---------- persistence helpers (per-viewer, not shared) ---------- */
@@ -474,7 +475,10 @@
       if (d && d["in"]) formDrafts["in"] = Object.assign(formDrafts["in"], d["in"]);
       if (d && d["out"]) formDrafts["out"] = Object.assign(formDrafts["out"], d["out"]);
       if (d && typeof d.addType === "string") formDrafts.addType = d.addType;
-      if (d && typeof d.addParty === "string") formDrafts.addParty = d.addParty;
+      if (d && d.addParty && typeof d.addParty === "object"){
+        if (typeof d.addParty["in"] === "string") formDrafts.addParty["in"] = d.addParty["in"];
+        if (typeof d.addParty["out"] === "string") formDrafts.addParty["out"] = d.addParty["out"];
+      }
     } catch(e){}
   }
   function saveLastHandler(name){
@@ -583,7 +587,8 @@
       ],
       transactions: [],
       drivers: [],
-      parties: [],
+      inParties: [],
+      outParties: [],
       adminPassword: "admin1234"
     };
   }
@@ -591,7 +596,13 @@
     if (!s || !Array.isArray(s.drumTypes)) s = defaultState();
     if (!Array.isArray(s.transactions)) s.transactions = [];
     if (!Array.isArray(s.drivers)) s.drivers = [];
-    if (!Array.isArray(s.parties)) s.parties = [];
+    if (!Array.isArray(s.inParties) || !Array.isArray(s.outParties)){
+      // migrate from the older single shared "parties" list, if present
+      var legacy = Array.isArray(s.parties) ? s.parties : [];
+      if (!Array.isArray(s.inParties)) s.inParties = legacy.slice();
+      if (!Array.isArray(s.outParties)) s.outParties = legacy.slice();
+    }
+    delete s.parties;
     if (typeof s.adminPassword !== "string" || !s.adminPassword) s.adminPassword = "admin1234";
     return s;
   }
@@ -849,7 +860,7 @@
     html += '<label for="f-partyId">' + esc(partyLabel) + '</label>';
     html += '<select class="input" id="f-partyId" data-field="partyId">';
     html += '<option value="">선택해주세요</option>';
-    STATE.parties.forEach(function(p){
+    STATE[partiesKey(kind)].forEach(function(p){
       var sel = d.partyId === p.id ? " selected" : "";
       html += '<option value="' + p.id + '"' + sel + '>' + esc(p.name) + '</option>';
     });
@@ -881,6 +892,38 @@
     html += '<input class="input" id="f-' + name + '" type="' + type + '" data-field="' + name + '" value="' + esc(value) + '"' + (placeholder?(' placeholder="'+esc(placeholder)+'"'):"") + '>';
     if (error) html += '<div class="err">' + esc(error) + '</div>';
     return html + '</div>';
+  }
+
+  function renderPartySection(kind, title, addPlaceholder, inUseTitle){
+    var key = partiesKey(kind);
+    var list = STATE[key];
+    var html = '<div class="section-title">' + esc(title) + '</div>';
+    if (list.length === 0){
+      html += '<div class="empty">등록된 항목이 없어요. 아래에서 추가해주세요.<br>추가하기 전에는 입고·출고 등록 시 "기타"로만 입력할 수 있어요.</div>';
+    } else {
+      list.forEach(function(p){
+        var inUse = partyInUse(STATE, kind, p.id);
+        var pendingCls = pendingDeleteParty[kind] === p.id ? " pending" : "";
+        html += '<div class="type-row">';
+        if (editingPartyId[kind] === p.id){
+          html += '<input class="input" style="flex:1" data-field="editParty" data-kind="' + kind + '" value="' + esc(editingPartyValue[kind]) + '">';
+          html += '<button type="button" data-action="savePartyEdit" data-kind="' + kind + '" data-id="' + p.id + '">저장</button>';
+          html += '<button type="button" data-action="cancelPartyEdit" data-kind="' + kind + '">취소</button>';
+        } else {
+          html += '<span class="tname">' + esc(p.name) + '</span>';
+          if (inUse) html += '<span class="tcount">사용 중</span>';
+          html += '<button type="button" data-action="startPartyEdit" data-kind="' + kind + '" data-id="' + p.id + '" aria-label="이름 수정">수정</button>';
+          html += '<button type="button" class="del' + pendingCls + '" data-action="deleteParty" data-kind="' + kind + '" data-id="' + p.id + '"' + (inUse?(' disabled title="'+esc(inUseTitle)+'"'):"") + '>' + (pendingDeleteParty[kind]===p.id ? "정말?" : "삭제") + '</button>';
+        }
+        html += '</div>';
+      });
+    }
+    html += '<div class="add-type-row" data-form="_addParty">';
+    html += '<input class="input" placeholder="' + esc(addPlaceholder) + '" data-field="addParty" data-kind="' + kind + '" value="' + esc(formDrafts.addParty[kind]) + '">';
+    html += '<button type="button" class="btn primary small" data-action="addParty" data-kind="' + kind + '">추가</button>';
+    html += '</div>';
+    if (formErrors.addParty[kind]) html += '<div class="err" style="margin-top:6px">' + esc(formErrors.addParty[kind]) + '</div>';
+    return html;
   }
 
   /* ---------- render: settings ---------- */
@@ -918,33 +961,8 @@
     html += '</div>';
     if (formErrors.addType) html += '<div class="err" style="margin-top:6px">' + esc(formErrors.addType) + '</div>';
 
-    html += '<div class="section-title">공급처 관리</div>';
-    if (STATE.parties.length === 0){
-      html += '<div class="empty">등록된 공급처가 없어요. 아래에서 추가해주세요.<br>추가하기 전에는 입고·출고 등록 시 "기타"로만 입력할 수 있어요.</div>';
-    } else {
-      STATE.parties.forEach(function(p){
-        var inUse = partyInUse(STATE, p.id);
-        var pendingCls = pendingDeleteParty === p.id ? " pending" : "";
-        html += '<div class="type-row">';
-        if (editingPartyId === p.id){
-          html += '<input class="input" style="flex:1" data-field="editParty" value="' + esc(editingPartyValue) + '">';
-          html += '<button type="button" data-action="savePartyEdit" data-id="' + p.id + '">저장</button>';
-          html += '<button type="button" data-action="cancelPartyEdit">취소</button>';
-        } else {
-          html += '<span class="tname">' + esc(p.name) + '</span>';
-          if (inUse) html += '<span class="tcount">사용 중</span>';
-          html += '<button type="button" data-action="startPartyEdit" data-id="' + p.id + '" aria-label="이름 수정">수정</button>';
-          html += '<button type="button" class="del' + pendingCls + '" data-action="deleteParty" data-id="' + p.id + '"' + (inUse?" disabled title=\"사용 중인 공급처는 삭제할 수 없어요\"":"") + '>' + (pendingDeleteParty===p.id ? "정말?" : "삭제") + '</button>';
-        }
-        html += '</div>';
-      });
-    }
-
-    html += '<div class="add-type-row" data-form="_addParty">';
-    html += '<input class="input" placeholder="새 공급처 이름 (예: 대성상사)" data-field="addParty" value="' + esc(formDrafts.addParty) + '">';
-    html += '<button type="button" class="btn primary small" data-action="addParty">추가</button>';
-    html += '</div>';
-    if (formErrors.addParty) html += '<div class="err" style="margin-top:6px">' + esc(formErrors.addParty) + '</div>';
+    html += renderPartySection("in", "입고 공급처 관리", "새 공급처 이름 (예: 대성상사)", "사용 중인 공급처는 삭제할 수 없어요");
+    html += renderPartySection("out", "출고처 관리 (용도·출고처)", "새 출고처 이름 (예: 세척 후 재사용)", "사용 중인 출고처는 삭제할 수 없어요");
 
     html += '<div class="section-title">기사 관리 (이름·PIN)</div>';
     if (STATE.drivers.length === 0){
@@ -996,10 +1014,10 @@
     pendingDeleteTx = null;
     pendingDeleteType = null;
     pendingDeleteDriver = null;
-    pendingDeleteParty = null;
+    pendingDeleteParty = { "in": null, "out": null };
     editingTypeId = null;
     editingDriverId = null;
-    editingPartyId = null;
+    editingPartyId = { "in": null, "out": null };
     render();
   }
 
@@ -1084,7 +1102,7 @@
       partyId = null;
       partyName = d.party.trim();
     } else {
-      var pMatch = STATE.parties.filter(function(p){ return p.id === d.partyId; })[0];
+      var pMatch = STATE[partiesKey(kind)].filter(function(p){ return p.id === d.partyId; })[0];
       partyId = d.partyId;
       partyName = pMatch ? pMatch.name : "";
     }
@@ -1166,44 +1184,48 @@
     publishState(newState, { flash: "드럼 종류를 삭제했어요", keepTab: "settings" }).then(function(){ render(); });
   }
 
-  function addParty(){
+  function addParty(kind){
     if (isReadOnly) return;
-    var name = (formDrafts.addParty || "").trim();
-    if (!name){ formErrors.addParty = "공급처 이름을 입력해주세요"; render(); return; }
-    if (STATE.parties.some(function(p){ return p.name === name; })){
-      formErrors.addParty = "이미 있는 이름이에요";
+    var key = partiesKey(kind);
+    var name = (formDrafts.addParty[kind] || "").trim();
+    if (!name){ formErrors.addParty[kind] = "이름을 입력해주세요"; render(); return; }
+    if (STATE[key].some(function(p){ return p.name === name; })){
+      formErrors.addParty[kind] = "이미 있는 이름이에요";
       render();
       return;
     }
-    formErrors.addParty = "";
+    formErrors.addParty[kind] = "";
     var newParty = { id: genId(), name: name };
-    var newState = Object.assign({}, STATE, { parties: STATE.parties.concat([newParty]) });
-    formDrafts.addParty = "";
-    publishState(newState, { flash: "공급처를 추가했어요", keepTab: "settings" }).then(function(){ render(); });
+    var patch = {}; patch[key] = STATE[key].concat([newParty]);
+    var newState = Object.assign({}, STATE, patch);
+    formDrafts.addParty[kind] = "";
+    publishState(newState, { flash: (kind==="in"?"입고 공급처를 추가했어요":"출고처를 추가했어요"), keepTab: "settings" }).then(function(){ render(); });
   }
-  function startPartyEdit(id){
-    var p = STATE.parties.filter(function(x){ return x.id === id; })[0];
+  function startPartyEdit(kind, id){
+    var p = STATE[partiesKey(kind)].filter(function(x){ return x.id === id; })[0];
     if (!p) return;
-    editingPartyId = id;
-    editingPartyValue = p.name;
+    editingPartyId[kind] = id;
+    editingPartyValue[kind] = p.name;
     render();
   }
-  function cancelPartyEdit(){ editingPartyId = null; render(); }
-  function savePartyEdit(id){
-    var name = (editingPartyValue || "").trim();
+  function cancelPartyEdit(kind){ editingPartyId[kind] = null; render(); }
+  function savePartyEdit(kind, id){
+    var name = (editingPartyValue[kind] || "").trim();
     if (!name) return;
-    var newState = Object.assign({}, STATE, {
-      parties: STATE.parties.map(function(p){ return p.id === id ? Object.assign({}, p, { name: name }) : p; })
-    });
-    editingPartyId = null;
-    publishState(newState, { flash: "공급처 이름을 수정했어요", keepTab: "settings" }).then(function(){ render(); });
+    var key = partiesKey(kind);
+    var patch = {}; patch[key] = STATE[key].map(function(p){ return p.id === id ? Object.assign({}, p, { name: name }) : p; });
+    var newState = Object.assign({}, STATE, patch);
+    editingPartyId[kind] = null;
+    publishState(newState, { flash: "이름을 수정했어요", keepTab: "settings" }).then(function(){ render(); });
   }
-  function deleteParty(id){
-    if (isReadOnly || partyInUse(STATE, id)) return;
-    if (pendingDeleteParty !== id){ pendingDeleteParty = id; render(); return; }
-    pendingDeleteParty = null;
-    var newState = Object.assign({}, STATE, { parties: STATE.parties.filter(function(p){ return p.id !== id; }) });
-    publishState(newState, { flash: "공급처를 삭제했어요", keepTab: "settings" }).then(function(){ render(); });
+  function deleteParty(kind, id){
+    if (isReadOnly || partyInUse(STATE, kind, id)) return;
+    if (pendingDeleteParty[kind] !== id){ pendingDeleteParty[kind] = id; render(); return; }
+    pendingDeleteParty[kind] = null;
+    var key = partiesKey(kind);
+    var patch = {}; patch[key] = STATE[key].filter(function(p){ return p.id !== id; });
+    var newState = Object.assign({}, STATE, patch);
+    publishState(newState, { flash: (kind==="in"?"입고 공급처를 삭제했어요":"출고처를 삭제했어요"), keepTab: "settings" }).then(function(){ render(); });
   }
 
   function addDriver(){
@@ -1271,11 +1293,11 @@
     else if (action === "cancelTypeEdit"){ cancelTypeEdit(); }
     else if (action === "saveTypeEdit"){ saveTypeEdit(t.dataset.id); }
     else if (action === "deleteType"){ if (!t.disabled) deleteType(t.dataset.id); }
-    else if (action === "addParty"){ addParty(); }
-    else if (action === "startPartyEdit"){ startPartyEdit(t.dataset.id); }
-    else if (action === "cancelPartyEdit"){ cancelPartyEdit(); }
-    else if (action === "savePartyEdit"){ savePartyEdit(t.dataset.id); }
-    else if (action === "deleteParty"){ if (!t.disabled) deleteParty(t.dataset.id); }
+    else if (action === "addParty"){ addParty(t.dataset.kind); }
+    else if (action === "startPartyEdit"){ startPartyEdit(t.dataset.kind, t.dataset.id); }
+    else if (action === "cancelPartyEdit"){ cancelPartyEdit(t.dataset.kind); }
+    else if (action === "savePartyEdit"){ savePartyEdit(t.dataset.kind, t.dataset.id); }
+    else if (action === "deleteParty"){ if (!t.disabled) deleteParty(t.dataset.kind, t.dataset.id); }
     else if (action === "setLoginMode"){ setLoginMode(t.dataset.value); }
     else if (action === "logout"){ logout(); }
     else if (action === "addDriver"){ addDriver(); }
@@ -1299,8 +1321,8 @@
     if (!el.dataset || !el.dataset.field) return;
     if (el.dataset.field === "editType"){ editingTypeValue = el.value; return; }
     if (el.dataset.field === "addType"){ formDrafts.addType = el.value; scheduleDraftSave(); return; }
-    if (el.dataset.field === "editParty"){ editingPartyValue = el.value; return; }
-    if (el.dataset.field === "addParty"){ formDrafts.addParty = el.value; scheduleDraftSave(); return; }
+    if (el.dataset.field === "editParty"){ editingPartyValue[el.dataset.kind] = el.value; return; }
+    if (el.dataset.field === "addParty"){ formDrafts.addParty[el.dataset.kind] = el.value; scheduleDraftSave(); return; }
     if (el.dataset.field === "editDriverName"){ editingDriverName = el.value; return; }
     if (el.dataset.field === "editDriverPin"){ editingDriverPin = el.value; return; }
     var form = el.closest("[data-form]");
