@@ -263,9 +263,11 @@
   .stock-hint{font-size:12px;color:var(--ink-muted);margin-top:-2px;}
   .stock-hint b{color:var(--ink);}
 
-  .item-row{display:flex;gap:8px;align-items:flex-start;margin-bottom:10px;}
+  .item-row{margin-bottom:10px;background:var(--surface-2);border-radius:var(--radius);padding:10px;}
+  .item-row-top{display:flex;gap:8px;align-items:flex-start;}
   .item-row-main{flex:1;min-width:0;}
   .item-row-qty{width:104px;flex:none;}
+  .item-row-good{margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);}
   .item-del{
     flex:none;width:36px;height:44px;margin-top:1px;
     border:none;background:transparent;color:var(--ink-faint);cursor:pointer;
@@ -416,7 +418,7 @@
     addType: "", addParty: { "in": "", "out": "" }, addDriver: "", adminPw: ""
   };
   var formDrafts = {
-    "in": { date: "", items: [{ drumTypeId: "", drumTypeOther: "", qty: "" }], partyId: "", party: "", handler: "", note: "" },
+    "in": { date: "", items: [{ drumTypeId: "", drumTypeOther: "", qty: "", goodQty: "" }], partyId: "", party: "", handler: "", note: "" },
     "out": { date: "", items: [{ drumTypeId: "", drumTypeOther: "", qty: "" }], partyId: "", party: "", handler: "", note: "" },
     addType: "",
     addParty: { "in": "", "out": "" },
@@ -482,7 +484,11 @@
     state.drumTypes.forEach(function(dt){ stock[dt.id] = 0; });
     state.transactions.forEach(function(t){
       if (!(t.drumTypeId in stock)) stock[t.drumTypeId] = 0;
-      stock[t.drumTypeId] += (t.type === "in" ? t.qty : -t.qty);
+      // only the 재생(reclaimable) portion of an inbound entry counts as
+      // stock; older entries without a goodQty split count in full, same
+      // as before this feature existed.
+      var inQty = t.goodQty != null ? t.goodQty : t.qty;
+      stock[t.drumTypeId] += (t.type === "in" ? inQty : -t.qty);
     });
     return stock;
   }
@@ -517,7 +523,7 @@
       if (d && d["out"]) formDrafts["out"] = Object.assign(formDrafts["out"], d["out"]);
       ["in","out"].forEach(function(k){
         if (!Array.isArray(formDrafts[k].items) || !formDrafts[k].items.length){
-          formDrafts[k].items = [{ drumTypeId: "", drumTypeOther: "", qty: "" }];
+          formDrafts[k].items = [{ drumTypeId: "", drumTypeOther: "", qty: "", goodQty: "" }];
         }
         formErrors[k] = { items: formDrafts[k].items.map(function(){ return {}; }) };
       });
@@ -811,6 +817,9 @@
     html += '<div class="tx-top"><span class="tx-drum">' + esc(drumName(t.drumTypeId)) + '</span>';
     html += '<span class="tx-qty ' + (isIn?"in":"out") + ' num">' + (isIn?"+":"-") + fmtNum(t.qty) + '개</span></div>';
     html += '<div class="tx-meta">' + fmtDate(t.date) + ' · ' + esc(t.party || "-") + ' · ' + esc(t.handler || "-") + '</div>';
+    if (isIn && t.goodQty != null && t.goodQty !== t.qty){
+      html += '<div class="tx-meta">재생 <b class="num">' + fmtNum(t.goodQty) + '개</b> · 고철 <b class="num">' + fmtNum(t.qty - t.goodQty) + '개</b></div>';
+    }
     if (t.note) html += '<div class="tx-note">' + esc(t.note) + '</div>';
     html += '</div>';
     if (withDelete && !isReadOnly){
@@ -918,11 +927,13 @@
         html += '<div class="party-card">';
         html += '<div class="party-card-head"><span class="party-card-name">' + esc(g.name) + '</span>';
         html += '<span class="party-card-total num">합계 ' + fmtNum(g.total) + '개</span></div>';
-        html += '<div class="report-table-wrap"><table class="report-table"><thead><tr><th>구분</th><th>드럼 종류</th><th>수량</th><th>담당자</th></tr></thead><tbody>';
+        html += '<div class="report-table-wrap"><table class="report-table"><thead><tr><th>구분</th><th>드럼 종류</th><th>수량</th><th>재생/고철</th><th>담당자</th></tr></thead><tbody>';
         g.items.forEach(function(t){
           var isIn = t.type === "in";
+          var hasSplit = isIn && t.goodQty != null && t.goodQty !== t.qty;
           html += '<tr><td>' + (isIn ? "입고" : "출고") + '</td><td>' + esc(drumName(t.drumTypeId)) + '</td>';
           html += '<td class="num ' + (isIn?"in":"out") + '">' + (isIn?"+":"-") + fmtNum(t.qty) + '</td>';
+          html += '<td class="num">' + (hasSplit ? (fmtNum(t.goodQty) + ' / ' + fmtNum(t.qty - t.goodQty)) : "-") + '</td>';
           html += '<td>' + esc(t.handler || "-") + '</td></tr>';
         });
         html += '</tbody></table></div>';
@@ -957,12 +968,16 @@
     var partyRows = [["업체명", "입고", "출고", "합계"]];
     partyGroups.forEach(function(g){ partyRows.push([g.name, g.in, g.out, g.total]); });
 
-    var detailRows = [["업체명", "구분", "드럼 종류", "수량", "담당자", "비고"]];
+    var detailRows = [["업체명", "구분", "드럼 종류", "수량", "재생드럼", "고철드럼", "담당자", "비고"]];
     partyGroups.forEach(function(g){
       g.items.forEach(function(t){
+        var isIn = t.type === "in";
+        var hasSplit = isIn && t.goodQty != null && t.goodQty !== t.qty;
         detailRows.push([
-          g.name, t.type === "in" ? "입고" : "출고",
-          drumName(t.drumTypeId), t.qty, t.handler || "", t.note || ""
+          g.name, isIn ? "입고" : "출고",
+          drumName(t.drumTypeId), t.qty,
+          hasSplit ? t.goodQty : "", hasSplit ? (t.qty - t.goodQty) : "",
+          t.handler || "", t.note || ""
         ]);
       });
     });
@@ -1003,9 +1018,11 @@
 
     // drum type + qty rows (one or more)
     html += '<div class="field"><label>드럼 종류·수량</label></div>';
+    var showGoodQty = isIn && session && session.role === "admin";
     d.items.forEach(function(item, idx){
       var itemErr = (err.items && err.items[idx]) || {};
       html += '<div class="item-row">';
+      html += '<div class="item-row-top">';
       html += '<div class="item-row-main">';
       html += '<div class="field' + (itemErr.drumTypeId?" has-err":"") + '">';
       html += '<select class="input" data-field="itemDrumTypeId" data-idx="' + idx + '">';
@@ -1036,6 +1053,23 @@
         html += '<button type="button" class="item-del" data-action="removeItem" data-kind="' + kind + '" data-idx="' + idx + '" aria-label="이 항목 삭제">' + iconWrap(ICONS.close, 15) + '</button>';
       }
       html += '</div>';
+      if (showGoodQty){
+        var qtyNum = parseInt(item.qty, 10);
+        var goodNum = (item.goodQty === "" || item.goodQty == null) ? null : parseInt(item.goodQty, 10);
+        html += '<div class="item-row-good">';
+        html += '<div class="field' + (itemErr.goodQty?" has-err":"") + '">';
+        html += '<label>재생드럼 수량 (선택)</label>';
+        html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="0" step="1" placeholder="비우면 입고수량 전체" data-field="itemGoodQty" data-idx="' + idx + '" value="' + esc(item.goodQty) + '"><span class="unit">개</span></div>';
+        if (itemErr.goodQty){
+          html += '<div class="err">' + esc(itemErr.goodQty) + '</div>';
+        } else if (goodNum != null && !isNaN(qtyNum)){
+          html += '<div class="stock-hint">고철드럼 <b class="num">' + fmtNum(qtyNum - goodNum) + '개</b>로 계산돼요 (입고수량 − 재생드럼 수량)</div>';
+        } else {
+          html += '<div class="stock-hint">비워두면 입고수량 전체가 재고로 들어가요</div>';
+        }
+        html += '</div>';
+        html += '</div>';
+      }
     });
     html += '<button type="button" class="btn ghost small" data-action="addItem" data-kind="' + kind + '" style="margin-bottom:14px">+ 드럼 종류 추가</button>';
 
@@ -1083,7 +1117,11 @@
       html += '<div class="tx-row">';
       html += '<span class="pill ' + (isIn?"in":"out") + '">' + (isIn ? "입고" : "출고") + '</span>';
       html += '<div class="tx-main"><div class="tx-top"><span class="tx-drum">' + esc(it.name) + '</span>';
-      html += '<span class="tx-qty ' + (isIn?"in":"out") + ' num">' + (isIn?"+":"-") + fmtNum(it.qty) + '개</span></div></div>';
+      html += '<span class="tx-qty ' + (isIn?"in":"out") + ' num">' + (isIn?"+":"-") + fmtNum(it.qty) + '개</span></div>';
+      if (isIn && it.goodQty != null && it.goodQty !== it.qty){
+        html += '<div class="tx-meta">재생 <b class="num">' + fmtNum(it.goodQty) + '개</b> · 고철 <b class="num">' + fmtNum(it.qty - it.goodQty) + '개</b></div>';
+      }
+      html += '</div>';
       html += '</div>';
     });
     html += '<button type="button" class="btn primary" data-action="startNewEntry" data-kind="' + kind + '" style="margin-top:16px">새로 등록하기</button>';
@@ -1306,6 +1344,11 @@
       else if (item.drumTypeId === OTHER_DRUM_ID && (!item.drumTypeOther || !item.drumTypeOther.trim())) itemErr.drumTypeOther = "드럼 종류를 입력해주세요";
       var qty = parseInt(item.qty, 10);
       if (!qty || qty <= 0) itemErr.qty = "수량을 입력해주세요";
+      if (kind === "in" && session && session.role === "admin" && item.goodQty !== "" && item.goodQty != null){
+        var goodQty = parseInt(item.goodQty, 10);
+        if (isNaN(goodQty) || goodQty < 0) itemErr.goodQty = "0 이상의 숫자를 입력해주세요";
+        else if (!itemErr.qty && goodQty > qty) itemErr.goodQty = "입고수량보다 클 수 없어요";
+      }
       errors.items[idx] = itemErr;
 
       if (kind === "out" && !itemErr.drumTypeId && !itemErr.drumTypeOther && !itemErr.qty){
@@ -1370,13 +1413,19 @@
       newDrumTypes = resolved.drumTypes;
       var qty = parseInt(item.qty, 10);
       var dtObj = newDrumTypes.filter(function(t){ return t.id === resolved.id; })[0];
-      resultItems.push({ name: dtObj ? dtObj.name : "", qty: qty });
-      txs.push({
+      var goodQty = qty;
+      if (kind === "in" && !isDriver && item.goodQty !== "" && item.goodQty != null){
+        goodQty = parseInt(item.goodQty, 10);
+      }
+      resultItems.push({ name: dtObj ? dtObj.name : "", qty: qty, goodQty: kind === "in" ? goodQty : null });
+      var tx = {
         id: genId(), type: kind, date: d.date, drumTypeId: resolved.id,
         qty: qty, party: partyName, partyId: partyId, handler: handlerName,
         driverId: isDriver ? session.driverId : null,
         note: (d.note || "").trim(), ts: ts0 + i
-      });
+      };
+      if (kind === "in") tx.goodQty = goodQty;
+      txs.push(tx);
     });
     var newState = Object.assign({}, STATE, { drumTypes: newDrumTypes, transactions: STATE.transactions.concat(txs) });
     if (!isDriver) saveLastHandler(handlerName);
@@ -1392,7 +1441,7 @@
         formView[kind] = "result";
         formDrafts[kind] = {
           date: todayStr(),
-          items: [{ drumTypeId: "", drumTypeOther: "", qty: "" }],
+          items: [{ drumTypeId: "", drumTypeOther: "", qty: "", goodQty: "" }],
           partyId: d.partyId, party: (d.partyId === OTHER_PARTY_ID ? "" : d.party),
           handler: d.handler, note: ""
         };
@@ -1406,7 +1455,7 @@
   }
 
   function addItem(kind){
-    formDrafts[kind].items.push({ drumTypeId: "", drumTypeOther: "", qty: "" });
+    formDrafts[kind].items.push({ drumTypeId: "", drumTypeOther: "", qty: "", goodQty: "" });
     if (formErrors[kind] && formErrors[kind].items) formErrors[kind].items.push({});
     render();
   }
@@ -1622,14 +1671,14 @@
     if (el.dataset.field === "addParty"){ formDrafts.addParty[el.dataset.kind] = el.value; scheduleDraftSave(); return; }
     if (el.dataset.field === "editDriverName"){ editingDriverName = el.value; return; }
     if (el.dataset.field === "editDriverPin"){ editingDriverPin = el.value; return; }
-    if (el.dataset.field === "itemDrumTypeId" || el.dataset.field === "itemDrumTypeOther" || el.dataset.field === "itemQty"){
+    if (el.dataset.field === "itemDrumTypeId" || el.dataset.field === "itemDrumTypeOther" || el.dataset.field === "itemQty" || el.dataset.field === "itemGoodQty"){
       var itemForm = el.closest("[data-form]");
       if (!itemForm) return;
       var itemKind = itemForm.dataset.form;
       var idx = parseInt(el.dataset.idx, 10);
       var items = formDrafts[itemKind] && formDrafts[itemKind].items;
       if (!items || !items[idx]) return;
-      var itemKey = el.dataset.field === "itemDrumTypeId" ? "drumTypeId" : el.dataset.field === "itemDrumTypeOther" ? "drumTypeOther" : "qty";
+      var itemKey = el.dataset.field === "itemDrumTypeId" ? "drumTypeId" : el.dataset.field === "itemDrumTypeOther" ? "drumTypeOther" : el.dataset.field === "itemGoodQty" ? "goodQty" : "qty";
       items[idx][itemKey] = el.value;
       scheduleDraftSave();
       return;
@@ -1650,7 +1699,7 @@
     var el = e.target;
     if (el.dataset && el.dataset.action === "setHistoryDrum"){ setHistoryDrum(el.value); return; }
     onInput(e);
-    if (el.dataset && (el.dataset.field === "partyId" || el.dataset.field === "itemDrumTypeId")){ render(); }
+    if (el.dataset && (el.dataset.field === "partyId" || el.dataset.field === "itemDrumTypeId" || el.dataset.field === "itemGoodQty" || el.dataset.field === "itemQty")){ render(); }
   }
 
   /* ---------- init ---------- */
