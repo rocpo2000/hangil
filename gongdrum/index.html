@@ -396,7 +396,7 @@
   var STATE_KEY = "gongdrum_state_v1";
   var OTHER_PARTY_ID = "__other__";
   var OTHER_DRUM_ID = "__other_drum__";
-  var ADMIN_TABS = ["dashboard","in","out","history","report","scrap","settings"];
+  var ADMIN_TABS = ["dashboard","in","out","history","report","settings"];
   var DRIVER_TABS = ["in","out","history"];
 
   /* ---------- state ---------- */
@@ -413,8 +413,6 @@
   var historyFilterType = "all";
   var historyFilterDrum = "all";
   var reportDate = todayStr();
-  var scrapDraft = { date: todayStr(), sold: {}, disposed: {}, note: "" };
-  var scrapErrors = { sold: {}, disposed: {} };
   var pendingDeleteTx = null;
   var pendingDeleteType = null;
   var pendingDeleteDriver = null;
@@ -423,7 +421,7 @@
   var formView = { "in": "form", "out": "form" }; // "form" | "result"
   var lastResult = { "in": null, "out": null };
   var formErrors = {
-    "in": { checks: {}, otherCheck: {} }, "out": { checks: {}, otherCheck: {} },
+    "in": { checks: {}, otherCheck: {} }, "out": { checks: {}, otherCheck: {}, scrapSold: {}, scrapDisposed: {} },
     addType: "", addParty: { "in": "", "out": "" }, addDriver: "", adminPw: ""
   };
   var formDrafts = {
@@ -435,6 +433,7 @@
     "out": {
       date: "", checks: {},
       otherChecked: false, otherName: "", otherQty: "",
+      scrapSold: {}, scrapDisposed: {},
       partyId: "", party: "", handler: "", note: ""
     },
     addType: "",
@@ -545,17 +544,14 @@
       if (!d.checks[dt.id]) d.checks[dt.id] = { checked: false, qty: "", goodQty: "" };
     });
   }
-  // same as ensureInChecks but for the 출고 checklist draft (no goodQty split needed there).
+  // same as ensureInChecks but for the 출고 checklist draft (no goodQty split
+  // needed there); also backfills the admin-only 매각/폐기 checklists that
+  // live on the same draft since the 고철 tab was folded into 출고.
   function ensureOutChecks(d){
     STATE.drumTypes.forEach(function(dt){
       if (!d.checks[dt.id]) d.checks[dt.id] = { checked: false, qty: "" };
-    });
-  }
-  // backfills both the 매각 and 폐기 checklists on the 고철 draft for every current drum type.
-  function ensureScrapChecks(d){
-    STATE.drumTypes.forEach(function(dt){
-      if (!d.sold[dt.id]) d.sold[dt.id] = { checked: false, qty: "" };
-      if (!d.disposed[dt.id]) d.disposed[dt.id] = { checked: false, qty: "" };
+      if (!d.scrapSold[dt.id]) d.scrapSold[dt.id] = { checked: false, qty: "" };
+      if (!d.scrapDisposed[dt.id]) d.scrapDisposed[dt.id] = { checked: false, qty: "" };
     });
   }
   function typeInUse(state, id){
@@ -594,7 +590,13 @@
       if (!formDrafts["out"].checks || typeof formDrafts["out"].checks !== "object" || Array.isArray(formDrafts["out"].checks)){
         formDrafts["out"].checks = {};
       }
-      formErrors["out"] = { checks: {}, otherCheck: {} };
+      if (!formDrafts["out"].scrapSold || typeof formDrafts["out"].scrapSold !== "object" || Array.isArray(formDrafts["out"].scrapSold)){
+        formDrafts["out"].scrapSold = {};
+      }
+      if (!formDrafts["out"].scrapDisposed || typeof formDrafts["out"].scrapDisposed !== "object" || Array.isArray(formDrafts["out"].scrapDisposed)){
+        formDrafts["out"].scrapDisposed = {};
+      }
+      formErrors["out"] = { checks: {}, otherCheck: {}, scrapSold: {}, scrapDisposed: {} };
       if (d && typeof d.addType === "string") formDrafts.addType = d.addType;
       if (d && d.addParty && typeof d.addParty === "object"){
         if (typeof d.addParty["in"] === "string") formDrafts.addParty["in"] = d.addParty["in"];
@@ -758,7 +760,6 @@
     var content = "";
     if (activeTab === "settings" && isAdmin) content = renderSettings();
     else if (activeTab === "report" && isAdmin) content = renderReport();
-    else if (activeTab === "scrap" && isAdmin) content = renderScrap();
     else if (activeTab === "in") content = renderForm("in");
     else if (activeTab === "out") content = renderForm("out");
     else if (activeTab === "history") content = renderHistory();
@@ -782,14 +783,13 @@
     html += '</main>';
 
     if (activeTab !== "settings"){
-      var cols = isAdmin ? 6 : 3;
+      var cols = isAdmin ? 5 : 3;
       html += '<nav class="app-nav"><div class="app-nav-inner" style="grid-template-columns:repeat(' + cols + ',1fr)">';
       if (isAdmin) html += navBtn("dashboard", ICONS.dashboard, "대시보드");
       html += navBtn("in", ICONS.inbox, "입고");
       html += navBtn("out", ICONS.outbox, "출고");
       html += navBtn("history", ICONS.history, isAdmin ? "이력" : "내 기록");
       if (isAdmin) html += navBtn("report", ICONS.report, "현황");
-      if (isAdmin) html += navBtn("scrap", ICONS.scrap, "고철");
       html += '</div></nav>';
     }
 
@@ -1083,89 +1083,6 @@
   }
 
   /* ---------- render: scrap (매각/폐기) ---------- */
-  function renderScrap(){
-    ensureScrapChecks(scrapDraft);
-    var totalScrapAll = 0;
-    STATE.drumTypes.forEach(function(dt){ totalScrapAll += computeScrapStock(STATE, dt.id); });
-
-    var html = "";
-    html += '<div class="section-title">고철드럼 매각·폐기 등록</div>';
-    html += '<div class="summary-card">';
-    html += '<div><div class="label">전체 고철 재고</div><div class="value num">' + fmtNum(totalScrapAll) + '<small>개</small></div></div>';
-    html += '<div class="meta">' + STATE.drumTypes.length + '종</div>';
-    html += '</div>';
-
-    if (STATE.drumTypes.length === 0){
-      html += '<div class="empty">먼저 드럼 종류를 등록해주세요.<br><a href="#" class="cta" data-action="switchTab" data-tab="settings">드럼 종류 추가하기 →</a></div>';
-      return html;
-    }
-
-    html += '<form data-form="scrap" data-action-submit="scrap">';
-    html += field("scrapDate", "날짜", "date", scrapDraft.date || todayStr(), scrapErrors.date);
-
-    html += '<div class="field"><label>매각 수량</label></div>';
-    STATE.drumTypes.forEach(function(dt){
-      var scrapStock = computeScrapStock(STATE, dt.id);
-      var c = scrapDraft.sold[dt.id] || { checked: false, qty: "" };
-      var cErr = (scrapErrors.sold && scrapErrors.sold[dt.id]) || {};
-      html += '<div class="check-row' + (c.checked?" checked":"") + '">';
-      html += '<label class="check-row-head"><input type="checkbox" data-field="scrapSoldToggle" data-id="' + dt.id + '"' + (c.checked?" checked":"") + '><span>' + esc(dt.name) + '</span></label>';
-      if (c.checked){
-        html += '<div class="check-row-fields">';
-        html += '<div class="field">';
-        html += '<div class="stock-hint">보유 고철 재고 <b class="num">' + fmtNum(scrapStock) + '개</b></div>';
-        html += '</div>';
-        html += '<div class="field' + (cErr.qty?" has-err":"") + '">';
-        html += '<label>매각 수량</label>';
-        html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="1" step="1" placeholder="0" data-field="scrapSoldQty" data-id="' + dt.id + '" value="' + esc(c.qty) + '"><span class="unit">개</span></div>';
-        if (cErr.qty) html += '<div class="err">' + esc(cErr.qty) + '</div>';
-        html += '</div>';
-        html += '</div>';
-      }
-      html += '</div>';
-    });
-
-    html += '<div class="field"><label>폐기 수량</label></div>';
-    STATE.drumTypes.forEach(function(dt){
-      var scrapStock = computeScrapStock(STATE, dt.id);
-      var c = scrapDraft.disposed[dt.id] || { checked: false, qty: "" };
-      var cErr = (scrapErrors.disposed && scrapErrors.disposed[dt.id]) || {};
-      html += '<div class="check-row' + (c.checked?" checked":"") + '">';
-      html += '<label class="check-row-head"><input type="checkbox" data-field="scrapDisposedToggle" data-id="' + dt.id + '"' + (c.checked?" checked":"") + '><span>' + esc(dt.name) + '</span></label>';
-      if (c.checked){
-        html += '<div class="check-row-fields">';
-        html += '<div class="field">';
-        html += '<div class="stock-hint">보유 고철 재고 <b class="num">' + fmtNum(scrapStock) + '개</b></div>';
-        html += '</div>';
-        html += '<div class="field' + (cErr.qty?" has-err":"") + '">';
-        html += '<label>폐기 수량</label>';
-        html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="1" step="1" placeholder="0" data-field="scrapDisposedQty" data-id="' + dt.id + '" value="' + esc(c.qty) + '"><span class="unit">개</span></div>';
-        if (cErr.qty) html += '<div class="err">' + esc(cErr.qty) + '</div>';
-        html += '</div>';
-        html += '</div>';
-      }
-      html += '</div>';
-    });
-
-    if (scrapErrors.noneChecked) html += '<div class="err" style="margin:-6px 0 14px">' + esc(scrapErrors.noneChecked) + '</div>';
-
-    html += '<div class="field"><label for="f-scrapNote">비고 (선택)</label>';
-    html += '<textarea class="input" id="f-scrapNote" data-field="scrapNote" placeholder="메모가 있다면 남겨주세요">' + esc(scrapDraft.note) + '</textarea></div>';
-
-    html += '<button type="submit" class="btn out-btn"' + (isReadOnly ? " disabled" : "") + '>매각·폐기 등록</button>';
-    html += '</form>';
-
-    html += '<div class="section-title">최근 매각·폐기 기록</div>';
-    var recent = STATE.transactions.filter(function(t){ return t.type === "sold" || t.type === "disposed"; })
-      .sort(function(a,b){ return b.ts - a.ts; });
-    if (recent.length === 0){
-      html += '<div class="empty">아직 매각·폐기 기록이 없어요.</div>';
-    } else {
-      recent.forEach(function(t){ html += renderScrapRow(t); });
-    }
-    return html;
-  }
-
   function renderScrapRow(t){
     var isSold = t.type === "sold";
     var pendingCls = pendingDeleteTx === t.id ? " pending" : "";
@@ -1182,87 +1099,6 @@
     }
     html += '</div>';
     return html;
-  }
-
-  function scrapEntryHasErrors(errors){
-    if (errors.date || errors.noneChecked) return true;
-    if (errors.sold && Object.keys(errors.sold).some(function(id){ return errors.sold[id] && Object.keys(errors.sold[id]).length > 0; })) return true;
-    if (errors.disposed && Object.keys(errors.disposed).some(function(id){ return errors.disposed[id] && Object.keys(errors.disposed[id]).length > 0; })) return true;
-    return false;
-  }
-
-  function validateScrapEntry(d){
-    var errors = { sold: {}, disposed: {} };
-    if (!d.date) errors.date = "날짜를 선택해주세요";
-    var anyChecked = false;
-
-    STATE.drumTypes.forEach(function(dt){
-      var avail = computeScrapStock(STATE, dt.id);
-      var used = 0;
-      var sc = d.sold[dt.id];
-      var dc = d.disposed[dt.id];
-      var sErr = {}, dErr = {};
-      if (sc && sc.checked){
-        anyChecked = true;
-        var sQty = parseInt(sc.qty, 10);
-        if (!sQty || sQty <= 0) sErr.qty = "수량을 입력해주세요";
-        else used += sQty;
-      }
-      if (dc && dc.checked){
-        anyChecked = true;
-        var dQty = parseInt(dc.qty, 10);
-        if (!dQty || dQty <= 0) dErr.qty = "수량을 입력해주세요";
-        else used += dQty;
-      }
-      if (used > avail){
-        var msg = "고철 재고보다 많아요 (현재 " + fmtNum(avail) + "개)";
-        if (sc && sc.checked && !sErr.qty) sErr.qty = msg;
-        if (dc && dc.checked && !dErr.qty) dErr.qty = msg;
-      }
-      if (Object.keys(sErr).length) errors.sold[dt.id] = sErr;
-      if (Object.keys(dErr).length) errors.disposed[dt.id] = dErr;
-    });
-
-    if (!anyChecked) errors.noneChecked = "매각 또는 폐기할 드럼 종류를 하나 이상 선택해주세요";
-    return errors;
-  }
-
-  function submitScrap(){
-    if (isReadOnly) return;
-    ensureScrapChecks(scrapDraft);
-    if (!scrapDraft.date) scrapDraft.date = todayStr();
-    var errors = validateScrapEntry(scrapDraft);
-    scrapErrors = errors;
-    if (scrapEntryHasErrors(errors)){ render(); return; }
-
-    var txs = [];
-    var ts0 = Date.now();
-    var seq = 0;
-    var note = (scrapDraft.note || "").trim();
-
-    STATE.drumTypes.forEach(function(dt){
-      var sc = scrapDraft.sold[dt.id];
-      if (sc && sc.checked){
-        txs.push({ id: genId(), type: "sold", date: scrapDraft.date, drumTypeId: dt.id, qty: parseInt(sc.qty, 10), note: note, ts: ts0 + (seq++) });
-      }
-      var dc = scrapDraft.disposed[dt.id];
-      if (dc && dc.checked){
-        txs.push({ id: genId(), type: "disposed", date: scrapDraft.date, drumTypeId: dt.id, qty: parseInt(dc.qty, 10), note: note, ts: ts0 + (seq++) });
-      }
-    });
-
-    var newState = Object.assign({}, STATE, { transactions: STATE.transactions.concat(txs) });
-
-    publishState(newState, { flash: "매각·폐기를 등록했어요" }).then(function(res){
-      if (res.ok){
-        scrapDraft = { date: scrapDraft.date, sold: {}, disposed: {}, note: "" };
-        ensureScrapChecks(scrapDraft);
-        scrapErrors = {};
-        render();
-      } else {
-        render();
-      }
-    });
   }
 
   /* ---------- render: in/out form ---------- */
@@ -1388,12 +1224,22 @@
   function renderOutForm(){
     var d = formDrafts["out"];
     ensureOutChecks(d);
-    var err = formErrors["out"] || { checks: {}, otherCheck: {} };
+    var err = formErrors["out"] || { checks: {}, otherCheck: {}, scrapSold: {}, scrapDisposed: {} };
     var stock = computeStock(STATE);
     var partyLabel = "용도 / 출고처";
     var partyPh = "예: 세척 후 재사용";
+    var isAdmin = session && session.role === "admin";
 
-    var html = '<form data-form="out" data-action-submit="out">';
+    var html = "";
+    if (isAdmin && STATE.drumTypes.length > 0){
+      var totalScrapAll = 0;
+      STATE.drumTypes.forEach(function(dt){ totalScrapAll += computeScrapStock(STATE, dt.id); });
+      html += '<div class="summary-card">';
+      html += '<div><div class="label">전체 고철 재고</div><div class="value num">' + fmtNum(totalScrapAll) + '<small>개</small></div></div>';
+      html += '<div class="meta">' + STATE.drumTypes.length + '종</div>';
+      html += '</div>';
+    }
+    html += '<form data-form="out" data-action-submit="out">';
     html += '<div class="section-title">공드럼 출고 등록</div>';
 
     if (STATE.drumTypes.length === 0 && !d.otherChecked){
@@ -1446,6 +1292,52 @@
 
     if (err.noneChecked) html += '<div class="err" style="margin:-6px 0 14px">' + esc(err.noneChecked) + '</div>';
 
+    if (isAdmin){
+      html += '<div class="field"><label>매각 수량 (선택)</label></div>';
+      STATE.drumTypes.forEach(function(dt){
+        var scrapStock = computeScrapStock(STATE, dt.id);
+        var sc = d.scrapSold[dt.id] || { checked: false, qty: "" };
+        var sErr = (err.scrapSold && err.scrapSold[dt.id]) || {};
+        html += '<div class="check-row' + (sc.checked?" checked":"") + '">';
+        html += '<label class="check-row-head"><input type="checkbox" data-field="scrapSoldToggle" data-id="' + dt.id + '"' + (sc.checked?" checked":"") + '><span>' + esc(dt.name) + '</span></label>';
+        if (sc.checked){
+          html += '<div class="check-row-fields">';
+          html += '<div class="field">';
+          html += '<div class="stock-hint">보유 고철 재고 <b class="num">' + fmtNum(scrapStock) + '개</b></div>';
+          html += '</div>';
+          html += '<div class="field' + (sErr.qty?" has-err":"") + '">';
+          html += '<label>매각 수량</label>';
+          html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="1" step="1" placeholder="0" data-field="scrapSoldQty" data-id="' + dt.id + '" value="' + esc(sc.qty) + '"><span class="unit">개</span></div>';
+          if (sErr.qty) html += '<div class="err">' + esc(sErr.qty) + '</div>';
+          html += '</div>';
+          html += '</div>';
+        }
+        html += '</div>';
+      });
+
+      html += '<div class="field"><label>고철 폐기 수량 (선택)</label></div>';
+      STATE.drumTypes.forEach(function(dt){
+        var scrapStockD = computeScrapStock(STATE, dt.id);
+        var dc = d.scrapDisposed[dt.id] || { checked: false, qty: "" };
+        var dErr = (err.scrapDisposed && err.scrapDisposed[dt.id]) || {};
+        html += '<div class="check-row' + (dc.checked?" checked":"") + '">';
+        html += '<label class="check-row-head"><input type="checkbox" data-field="scrapDisposedToggle" data-id="' + dt.id + '"' + (dc.checked?" checked":"") + '><span>' + esc(dt.name) + '</span></label>';
+        if (dc.checked){
+          html += '<div class="check-row-fields">';
+          html += '<div class="field">';
+          html += '<div class="stock-hint">보유 고철 재고 <b class="num">' + fmtNum(scrapStockD) + '개</b></div>';
+          html += '</div>';
+          html += '<div class="field' + (dErr.qty?" has-err":"") + '">';
+          html += '<label>폐기 수량</label>';
+          html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="1" step="1" placeholder="0" data-field="scrapDisposedQty" data-id="' + dt.id + '" value="' + esc(dc.qty) + '"><span class="unit">개</span></div>';
+          if (dErr.qty) html += '<div class="err">' + esc(dErr.qty) + '</div>';
+          html += '</div>';
+          html += '</div>';
+        }
+        html += '</div>';
+      });
+    }
+
     html += '<div class="field' + (err.partyId?" has-err":"") + '">';
     html += '<label for="f-partyId">' + esc(partyLabel) + '</label>';
     html += '<select class="input" id="f-partyId" data-field="partyId">';
@@ -1473,10 +1365,23 @@
     html += '<button type="submit" class="btn out-btn"' + (submitting["out"] || isReadOnly ? " disabled" : "") + '>' + (submitting["out"] ? "저장 중..." : "출고 등록") + '</button>';
     if (isReadOnly) html += '<div class="hint" style="text-align:center">읽기 전용 보기에서는 등록할 수 없어요.</div>';
     html += '</form>';
+
+    if (isAdmin){
+      html += '<div class="section-title">최근 매각·폐기 기록</div>';
+      var recentScrap = STATE.transactions.filter(function(t){ return t.type === "sold" || t.type === "disposed"; })
+        .sort(function(a,b){ return b.ts - a.ts; });
+      if (recentScrap.length === 0){
+        html += '<div class="empty">아직 매각·폐기 기록이 없어요.</div>';
+      } else {
+        recentScrap.forEach(function(t){ html += renderScrapRow(t); });
+      }
+    }
     return html;
   }
 
   /* ---------- render: registration result ---------- */
+  var RESULT_PILL = { in: "입고", out: "출고", sold: "매각", disposed: "폐기" };
+
   function renderResult(kind){
     var r = lastResult[kind];
     if (!r) return "";
@@ -1486,11 +1391,13 @@
     html += '<div class="result-meta">' + fmtDate(r.date) + ' · ' + esc(r.partyName || "-") + ' · ' + esc(r.handlerName || "-") + '</div>';
     if (r.note) html += '<div class="tx-note" style="margin-bottom:10px">' + esc(r.note) + '</div>';
     r.items.forEach(function(it){
+      var txType = it.txType || (isIn ? "in" : "out");
+      var isPlus = txType === "in";
       html += '<div class="tx-row">';
-      html += '<span class="pill ' + (isIn?"in":"out") + '">' + (isIn ? "입고" : "출고") + '</span>';
+      html += '<span class="pill ' + (isPlus?"in":"out") + '">' + RESULT_PILL[txType] + '</span>';
       html += '<div class="tx-main"><div class="tx-top"><span class="tx-drum">' + esc(it.name) + '</span>';
-      html += '<span class="tx-qty ' + (isIn?"in":"out") + ' num">' + (isIn?"+":"-") + fmtNum(it.qty) + '개</span></div>';
-      if (isIn && it.goodQty != null && it.goodQty !== it.qty){
+      html += '<span class="tx-qty ' + (isPlus?"in":"out") + ' num">' + (isPlus?"+":"-") + fmtNum(it.qty) + '개</span></div>';
+      if (txType === "in" && it.goodQty != null && it.goodQty !== it.qty){
         html += '<div class="tx-meta">재생 <b class="num">' + fmtNum(it.goodQty) + '개</b> · 고철 <b class="num">' + fmtNum(it.qty - it.goodQty) + '개</b></div>';
       }
       html += '</div>';
@@ -1703,20 +1610,24 @@
     if (errors.date || errors.partyId || errors.party || errors.handler || errors.noneChecked) return true;
     if (errors.checks && Object.keys(errors.checks).some(function(id){ return errors.checks[id] && Object.keys(errors.checks[id]).length > 0; })) return true;
     if (errors.otherCheck && Object.keys(errors.otherCheck).length > 0) return true;
+    if (errors.scrapSold && Object.keys(errors.scrapSold).some(function(id){ return errors.scrapSold[id] && Object.keys(errors.scrapSold[id]).length > 0; })) return true;
+    if (errors.scrapDisposed && Object.keys(errors.scrapDisposed).some(function(id){ return errors.scrapDisposed[id] && Object.keys(errors.scrapDisposed[id]).length > 0; })) return true;
     return false;
   }
 
   function validateOutEntry(d){
-    var errors = { checks: {}, otherCheck: {} };
+    var errors = { checks: {}, otherCheck: {}, scrapSold: {}, scrapDisposed: {} };
     if (!d.date) errors.date = "날짜를 선택해주세요";
 
     var stock = computeStock(STATE);
-    var anyChecked = false;
+    var isAdmin = session && session.role === "admin";
+    var anyOutChecked = false;
+    var anyScrapChecked = false;
 
     STATE.drumTypes.forEach(function(dt){
       var c = d.checks[dt.id];
       if (!c || !c.checked) return;
-      anyChecked = true;
+      anyOutChecked = true;
       var cErr = {};
       var qty = parseInt(c.qty, 10);
       if (!qty || qty <= 0) cErr.qty = "수량을 입력해주세요";
@@ -1728,7 +1639,7 @@
     });
 
     if (d.otherChecked){
-      anyChecked = true;
+      anyOutChecked = true;
       var oErr = {};
       if (!d.otherName || !d.otherName.trim()) oErr.name = "드럼 종류를 입력해주세요";
       var oQty = parseInt(d.otherQty, 10);
@@ -1741,12 +1652,46 @@
       if (Object.keys(oErr).length) errors.otherCheck = oErr;
     }
 
-    if (!anyChecked) errors.noneChecked = "드럼 종류를 하나 이상 선택해주세요";
+    // 매각/폐기는 관리자만 등록할 수 있어요 (기사님은 해당 체크박스 자체를 볼 수 없어요).
+    if (isAdmin){
+      STATE.drumTypes.forEach(function(dt){
+        var scrapAvail = computeScrapStock(STATE, dt.id);
+        var used = 0;
+        var sc = d.scrapSold[dt.id];
+        var dc = d.scrapDisposed[dt.id];
+        var sErr = {}, dErr = {};
+        if (sc && sc.checked){
+          anyScrapChecked = true;
+          var sQty = parseInt(sc.qty, 10);
+          if (!sQty || sQty <= 0) sErr.qty = "수량을 입력해주세요";
+          else used += sQty;
+        }
+        if (dc && dc.checked){
+          anyScrapChecked = true;
+          var dQty = parseInt(dc.qty, 10);
+          if (!dQty || dQty <= 0) dErr.qty = "수량을 입력해주세요";
+          else used += dQty;
+        }
+        if (used > scrapAvail){
+          var msg = "고철 재고보다 많아요 (현재 " + fmtNum(scrapAvail) + "개)";
+          if (sc && sc.checked && !sErr.qty) sErr.qty = msg;
+          if (dc && dc.checked && !dErr.qty) dErr.qty = msg;
+        }
+        if (Object.keys(sErr).length) errors.scrapSold[dt.id] = sErr;
+        if (Object.keys(dErr).length) errors.scrapDisposed[dt.id] = dErr;
+      });
+    }
 
-    if (!d.partyId) errors.partyId = "용도나 출고처를 선택해주세요";
-    else if (d.partyId === OTHER_PARTY_ID && (!d.party || !d.party.trim())) errors.party = "용도나 출고처를 입력해주세요";
-    var isDriver = session && session.role === "driver";
-    if (!isDriver && (!d.handler || !d.handler.trim())) errors.handler = "담당자를 입력해주세요";
+    if (!anyOutChecked && !anyScrapChecked) errors.noneChecked = "출고하거나 매각·폐기할 드럼 종류를 하나 이상 선택해주세요";
+
+    // 용도/출고처·담당자는 실제 출고 항목이 있을 때만 필요해요. 매각·폐기만
+    // 등록할 때는 (예전 고철 탭처럼) 필요 없어요.
+    if (anyOutChecked){
+      if (!d.partyId) errors.partyId = "용도나 출고처를 선택해주세요";
+      else if (d.partyId === OTHER_PARTY_ID && (!d.party || !d.party.trim())) errors.party = "용도나 출고처를 입력해주세요";
+      var isDriver = session && session.role === "driver";
+      if (!isDriver && (!d.handler || !d.handler.trim())) errors.handler = "담당자를 입력해주세요";
+    }
     return errors;
   }
 
@@ -1760,14 +1705,20 @@
     if (outEntryHasErrors(errors)){ render(); return; }
 
     var isDriver = session.role === "driver";
-    var handlerName = isDriver ? session.name : d.handler.trim();
+    var isAdmin = session.role === "admin";
+    var anyOutChecked = d.otherChecked || STATE.drumTypes.some(function(dt){
+      var c = d.checks[dt.id];
+      return c && c.checked;
+    });
+
+    var handlerName = isDriver ? session.name : (d.handler || "").trim();
     var partyId, partyName;
     if (d.partyId === OTHER_PARTY_ID){
       partyId = null;
-      partyName = d.party.trim();
+      partyName = (d.party || "").trim();
     } else {
       var pMatch = STATE.outParties.filter(function(p){ return p.id === d.partyId; })[0];
-      partyId = d.partyId;
+      partyId = d.partyId || null;
       partyName = pMatch ? pMatch.name : "";
     }
 
@@ -1776,17 +1727,18 @@
     var txs = [];
     var ts0 = Date.now();
     var seq = 0;
+    var note = (d.note || "").trim();
 
     STATE.drumTypes.forEach(function(dt){
       var c = d.checks[dt.id];
       if (!c || !c.checked) return;
       var qty = parseInt(c.qty, 10);
-      resultItems.push({ name: dt.name, qty: qty, goodQty: null });
+      resultItems.push({ name: dt.name, qty: qty, goodQty: null, txType: "out" });
       txs.push({
         id: genId(), type: "out", date: d.date, drumTypeId: dt.id,
         qty: qty, party: partyName, partyId: partyId, handler: handlerName,
         driverId: isDriver ? session.driverId : null,
-        note: (d.note || "").trim(), ts: ts0 + (seq++)
+        note: note, ts: ts0 + (seq++)
       });
     });
 
@@ -1795,35 +1747,59 @@
       newDrumTypes = resolved.drumTypes;
       var oQty = parseInt(d.otherQty, 10);
       var dtObj = newDrumTypes.filter(function(t){ return t.id === resolved.id; })[0];
-      resultItems.push({ name: dtObj ? dtObj.name : "", qty: oQty, goodQty: null });
+      resultItems.push({ name: dtObj ? dtObj.name : "", qty: oQty, goodQty: null, txType: "out" });
       txs.push({
         id: genId(), type: "out", date: d.date, drumTypeId: resolved.id,
         qty: oQty, party: partyName, partyId: partyId, handler: handlerName,
         driverId: isDriver ? session.driverId : null,
-        note: (d.note || "").trim(), ts: ts0 + (seq++)
+        note: note, ts: ts0 + (seq++)
+      });
+    }
+
+    // 매각·폐기는 관리자 전용 (기사님 화면에는 해당 체크박스가 아예 없어요).
+    if (isAdmin){
+      STATE.drumTypes.forEach(function(dt){
+        var sc = d.scrapSold[dt.id];
+        if (sc && sc.checked){
+          var sQty = parseInt(sc.qty, 10);
+          resultItems.push({ name: dt.name, qty: sQty, goodQty: null, txType: "sold" });
+          txs.push({ id: genId(), type: "sold", date: d.date, drumTypeId: dt.id, qty: sQty, note: note, ts: ts0 + (seq++) });
+        }
+        var dc = d.scrapDisposed[dt.id];
+        if (dc && dc.checked){
+          var dQty = parseInt(dc.qty, 10);
+          resultItems.push({ name: dt.name, qty: dQty, goodQty: null, txType: "disposed" });
+          txs.push({ id: genId(), type: "disposed", date: d.date, drumTypeId: dt.id, qty: dQty, note: note, ts: ts0 + (seq++) });
+        }
       });
     }
 
     var newState = Object.assign({}, STATE, { drumTypes: newDrumTypes, transactions: STATE.transactions.concat(txs) });
-    if (!isDriver) saveLastHandler(handlerName);
+    if (anyOutChecked && !isDriver) saveLastHandler(handlerName);
+
+    var hasScrapTx = txs.some(function(t){ return t.type === "sold" || t.type === "disposed"; });
+    var flashMsg = anyOutChecked
+      ? (hasScrapTx ? "출고와 매각·폐기를 등록했어요" : "출고를 등록했어요")
+      : "매각·폐기를 등록했어요";
 
     submitting["out"] = true; render();
-    publishState(newState, { flash: "출고를 등록했어요", keepTab: "out" }).then(function(res){
+    publishState(newState, { flash: flashMsg, keepTab: "out" }).then(function(res){
       submitting["out"] = false;
       if (res.ok){
         lastResult["out"] = {
           date: d.date, partyName: partyName, handlerName: handlerName,
-          note: (d.note || "").trim(), items: resultItems
+          note: note, items: resultItems
         };
         formView["out"] = "result";
         formDrafts["out"] = {
           date: todayStr(), checks: {},
           otherChecked: false, otherName: "", otherQty: "",
+          scrapSold: {}, scrapDisposed: {},
           partyId: d.partyId, party: (d.partyId === OTHER_PARTY_ID ? "" : d.party),
           handler: d.handler, note: ""
         };
         ensureOutChecks(formDrafts["out"]);
-        formErrors["out"] = { checks: {}, otherCheck: {} };
+        formErrors["out"] = { checks: {}, otherCheck: {}, scrapSold: {}, scrapDisposed: {} };
         ss_set(DRAFT_KEY, JSON.stringify(formDrafts));
         render();
       } else {
@@ -2167,7 +2143,6 @@
     var kind = f.dataset.actionSubmit;
     if (kind === "loginDriver"){ loginDriverSubmit(); }
     else if (kind === "loginAdmin"){ loginAdminSubmit(); }
-    else if (kind === "scrap"){ submitScrap(); }
     else if (kind === "in"){ submitInEntry(); }
     else if (kind === "out"){ submitOutEntry(); }
   }
@@ -2193,15 +2168,14 @@
       return;
     }
     if (el.dataset.field === "reportDate"){ reportDate = el.value; render(); return; }
-    if (el.dataset.field === "scrapDate"){ scrapDraft.date = el.value; return; }
     if (el.dataset.field === "scrapSoldQty" || el.dataset.field === "scrapDisposedQty"){
       var scrapId = el.dataset.id;
-      var bucket = el.dataset.field === "scrapSoldQty" ? scrapDraft.sold : scrapDraft.disposed;
+      var bucket = el.dataset.field === "scrapSoldQty" ? formDrafts["out"].scrapSold : formDrafts["out"].scrapDisposed;
       if (!bucket[scrapId]) bucket[scrapId] = { checked: false, qty: "" };
       bucket[scrapId].qty = el.value;
+      scheduleDraftSave();
       return;
     }
-    if (el.dataset.field === "scrapNote"){ scrapDraft.note = el.value; return; }
     if (el.dataset.field === "editType"){ editingTypeValue = el.value; return; }
     if (el.dataset.field === "addType"){ formDrafts.addType = el.value; scheduleDraftSave(); return; }
     if (el.dataset.field === "editParty"){ editingPartyValue[el.dataset.kind] = el.value; return; }
@@ -2245,17 +2219,19 @@
     }
     if (el.dataset && el.dataset.field === "scrapSoldToggle"){
       var soldId = el.dataset.id;
-      ensureScrapChecks(scrapDraft);
-      if (!scrapDraft.sold[soldId]) scrapDraft.sold[soldId] = { checked: false, qty: "" };
-      scrapDraft.sold[soldId].checked = el.checked;
+      ensureOutChecks(formDrafts["out"]);
+      if (!formDrafts["out"].scrapSold[soldId]) formDrafts["out"].scrapSold[soldId] = { checked: false, qty: "" };
+      formDrafts["out"].scrapSold[soldId].checked = el.checked;
+      scheduleDraftSave();
       render();
       return;
     }
     if (el.dataset && el.dataset.field === "scrapDisposedToggle"){
       var disposedId = el.dataset.id;
-      ensureScrapChecks(scrapDraft);
-      if (!scrapDraft.disposed[disposedId]) scrapDraft.disposed[disposedId] = { checked: false, qty: "" };
-      scrapDraft.disposed[disposedId].checked = el.checked;
+      ensureOutChecks(formDrafts["out"]);
+      if (!formDrafts["out"].scrapDisposed[disposedId]) formDrafts["out"].scrapDisposed[disposedId] = { checked: false, qty: "" };
+      formDrafts["out"].scrapDisposed[disposedId].checked = el.checked;
+      scheduleDraftSave();
       render();
       return;
     }
