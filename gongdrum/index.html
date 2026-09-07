@@ -1227,13 +1227,11 @@
           var goodNum = (c.goodQty === "" || c.goodQty == null) ? null : parseInt(c.goodQty, 10);
           html += '<div class="field' + (cErr.goodQty?" has-err":"") + '">';
           html += '<label>하루 재생 드럼 수량 (선택)</label>';
-          html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="0" step="1" placeholder="비우면 입고수량 전체" data-field="checkGoodQty" data-id="' + dt.id + '" value="' + esc(c.goodQty) + '"><span class="unit">개</span></div>';
+          html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="0" step="1" placeholder="0" data-field="checkGoodQty" data-id="' + dt.id + '" value="' + esc(c.goodQty) + '"><span class="unit">개</span></div>';
           if (cErr.goodQty){
             html += '<div class="err">' + esc(cErr.goodQty) + '</div>';
-          } else if (goodNum != null && !isNaN(qtyNum)){
-            html += '<div class="stock-hint">고철드럼 <b class="num">' + fmtNum(qtyNum - goodNum) + '개</b>로 계산돼요 (입고수량 − 하루 재생 드럼 수량)</div>';
-          } else {
-            html += '<div class="stock-hint">비워두면 입고수량 전체가 재고로 들어가요</div>';
+          } else if (!isNaN(qtyNum) && qtyNum > 0){
+            html += '<div class="stock-hint">고철드럼 <b class="num">' + fmtNum(qtyNum - (goodNum != null ? goodNum : 0)) + '개</b>로 계산돼요 (입고수량 − 하루 재생 드럼 수량)</div>';
           }
           html += '</div>';
         }
@@ -1262,13 +1260,11 @@
         var oGoodNum = (d.otherGoodQty === "" || d.otherGoodQty == null) ? null : parseInt(d.otherGoodQty, 10);
         html += '<div class="field' + (otherErr.goodQty?" has-err":"") + '">';
         html += '<label>하루 재생 드럼 수량 (선택)</label>';
-        html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="0" step="1" placeholder="비우면 입고수량 전체" data-field="otherGoodQty" value="' + esc(d.otherGoodQty) + '"><span class="unit">개</span></div>';
+        html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="0" step="1" placeholder="0" data-field="otherGoodQty" value="' + esc(d.otherGoodQty) + '"><span class="unit">개</span></div>';
         if (otherErr.goodQty){
           html += '<div class="err">' + esc(otherErr.goodQty) + '</div>';
-        } else if (oGoodNum != null && !isNaN(oQtyNum)){
-          html += '<div class="stock-hint">고철드럼 <b class="num">' + fmtNum(oQtyNum - oGoodNum) + '개</b>로 계산돼요 (입고수량 − 하루 재생 드럼 수량)</div>';
-        } else {
-          html += '<div class="stock-hint">비워두면 입고수량 전체가 재고로 들어가요</div>';
+        } else if (!isNaN(oQtyNum) && oQtyNum > 0){
+          html += '<div class="stock-hint">고철드럼 <b class="num">' + fmtNum(oQtyNum - (oGoodNum != null ? oGoodNum : 0)) + '개</b>로 계산돼요 (입고수량 − 하루 재생 드럼 수량)</div>';
         }
         html += '</div>';
       }
@@ -1828,8 +1824,12 @@
       var c = d.checks[dt.id];
       if (!c || !c.checked) return;
       var qty = parseInt(c.qty, 10);
+      // admin can split off a reclaim (재생) amount; anything not explicitly
+      // marked as reclaimed counts as scrap, so a blank field means 0, not
+      // the full qty (drivers never see this field, so their full qty
+      // still becomes stock — there's no split to make).
       var goodQty = qty;
-      if (isAdmin && c.goodQty !== "" && c.goodQty != null) goodQty = parseInt(c.goodQty, 10);
+      if (isAdmin) goodQty = (c.goodQty !== "" && c.goodQty != null) ? parseInt(c.goodQty, 10) : 0;
       resultItems.push({ name: dt.name, qty: qty, goodQty: goodQty });
       txs.push({
         id: genId(), type: "in", date: d.date, drumTypeId: dt.id,
@@ -1844,7 +1844,7 @@
       newDrumTypes = resolved.drumTypes;
       var oQty = parseInt(d.otherQty, 10);
       var oGood = oQty;
-      if (isAdmin && d.otherGoodQty !== "" && d.otherGoodQty != null) oGood = parseInt(d.otherGoodQty, 10);
+      if (isAdmin) oGood = (d.otherGoodQty !== "" && d.otherGoodQty != null) ? parseInt(d.otherGoodQty, 10) : 0;
       var dtObj = newDrumTypes.filter(function(t){ return t.id === resolved.id; })[0];
       resultItems.push({ name: dtObj ? dtObj.name : "", qty: oQty, goodQty: oGood });
       txs.push({
