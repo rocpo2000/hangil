@@ -413,8 +413,8 @@
   var historyFilterType = "all";
   var historyFilterDrum = "all";
   var reportDate = todayStr();
-  var scrapDraft = { date: todayStr(), drumTypeId: "", kind: "sold", qty: "", note: "" };
-  var scrapErrors = {};
+  var scrapDraft = { date: todayStr(), sold: {}, disposed: {}, note: "" };
+  var scrapErrors = { sold: {}, disposed: {} };
   var pendingDeleteTx = null;
   var pendingDeleteType = null;
   var pendingDeleteDriver = null;
@@ -423,7 +423,7 @@
   var formView = { "in": "form", "out": "form" }; // "form" | "result"
   var lastResult = { "in": null, "out": null };
   var formErrors = {
-    "in": { checks: {}, otherCheck: {} }, "out": { items: [{}] },
+    "in": { checks: {}, otherCheck: {} }, "out": { checks: {}, otherCheck: {} },
     addType: "", addParty: { "in": "", "out": "" }, addDriver: "", adminPw: ""
   };
   var formDrafts = {
@@ -432,7 +432,11 @@
       otherChecked: false, otherName: "", otherQty: "", otherGoodQty: "",
       partyId: "", party: "", handler: "", note: ""
     },
-    "out": { date: "", items: [{ drumTypeId: "", drumTypeOther: "", qty: "" }], partyId: "", party: "", handler: "", note: "" },
+    "out": {
+      date: "", checks: {},
+      otherChecked: false, otherName: "", otherQty: "",
+      partyId: "", party: "", handler: "", note: ""
+    },
     addType: "",
     addParty: { "in": "", "out": "" },
     login: { driverId: "", pin: "", adminPw: "" },
@@ -541,6 +545,19 @@
       if (!d.checks[dt.id]) d.checks[dt.id] = { checked: false, qty: "", goodQty: "" };
     });
   }
+  // same as ensureInChecks but for the 출고 checklist draft (no goodQty split needed there).
+  function ensureOutChecks(d){
+    STATE.drumTypes.forEach(function(dt){
+      if (!d.checks[dt.id]) d.checks[dt.id] = { checked: false, qty: "" };
+    });
+  }
+  // backfills both the 매각 and 폐기 checklists on the 고철 draft for every current drum type.
+  function ensureScrapChecks(d){
+    STATE.drumTypes.forEach(function(dt){
+      if (!d.sold[dt.id]) d.sold[dt.id] = { checked: false, qty: "" };
+      if (!d.disposed[dt.id]) d.disposed[dt.id] = { checked: false, qty: "" };
+    });
+  }
   function typeInUse(state, id){
     return state.transactions.some(function(t){ return t.drumTypeId === id; });
   }
@@ -574,10 +591,10 @@
         formDrafts["in"].checks = {};
       }
       formErrors["in"] = { checks: {}, otherCheck: {} };
-      if (!Array.isArray(formDrafts["out"].items) || !formDrafts["out"].items.length){
-        formDrafts["out"].items = [{ drumTypeId: "", drumTypeOther: "", qty: "" }];
+      if (!formDrafts["out"].checks || typeof formDrafts["out"].checks !== "object" || Array.isArray(formDrafts["out"].checks)){
+        formDrafts["out"].checks = {};
       }
-      formErrors["out"] = { items: formDrafts["out"].items.map(function(){ return {}; }) };
+      formErrors["out"] = { checks: {}, otherCheck: {} };
       if (d && typeof d.addType === "string") formDrafts.addType = d.addType;
       if (d && d.addParty && typeof d.addParty === "object"){
         if (typeof d.addParty["in"] === "string") formDrafts.addParty["in"] = d.addParty["in"];
@@ -1067,6 +1084,7 @@
 
   /* ---------- render: scrap (매각/폐기) ---------- */
   function renderScrap(){
+    ensureScrapChecks(scrapDraft);
     var totalScrapAll = 0;
     STATE.drumTypes.forEach(function(dt){ totalScrapAll += computeScrapStock(STATE, dt.id); });
 
@@ -1085,38 +1103,56 @@
     html += '<form data-form="scrap" data-action-submit="scrap">';
     html += field("scrapDate", "날짜", "date", scrapDraft.date || todayStr(), scrapErrors.date);
 
-    html += '<div class="field' + (scrapErrors.drumTypeId?" has-err":"") + '">';
-    html += '<label for="f-scrapDrumType">드럼 종류</label>';
-    html += '<select class="input" id="f-scrapDrumType" data-field="scrapDrumTypeId">';
-    html += '<option value="">선택해주세요</option>';
+    html += '<div class="field"><label>매각 수량</label></div>';
     STATE.drumTypes.forEach(function(dt){
-      var sel = scrapDraft.drumTypeId === dt.id ? " selected" : "";
-      html += '<option value="' + dt.id + '"' + sel + '>' + esc(dt.name) + '</option>';
+      var scrapStock = computeScrapStock(STATE, dt.id);
+      var c = scrapDraft.sold[dt.id] || { checked: false, qty: "" };
+      var cErr = (scrapErrors.sold && scrapErrors.sold[dt.id]) || {};
+      html += '<div class="check-row' + (c.checked?" checked":"") + '">';
+      html += '<label class="check-row-head"><input type="checkbox" data-field="scrapSoldToggle" data-id="' + dt.id + '"' + (c.checked?" checked":"") + '><span>' + esc(dt.name) + '</span></label>';
+      if (c.checked){
+        html += '<div class="check-row-fields">';
+        html += '<div class="field">';
+        html += '<div class="stock-hint">보유 고철 재고 <b class="num">' + fmtNum(scrapStock) + '개</b></div>';
+        html += '</div>';
+        html += '<div class="field' + (cErr.qty?" has-err":"") + '">';
+        html += '<label>매각 수량</label>';
+        html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="1" step="1" placeholder="0" data-field="scrapSoldQty" data-id="' + dt.id + '" value="' + esc(c.qty) + '"><span class="unit">개</span></div>';
+        if (cErr.qty) html += '<div class="err">' + esc(cErr.qty) + '</div>';
+        html += '</div>';
+        html += '</div>';
+      }
+      html += '</div>';
     });
-    html += '</select>';
-    if (scrapDraft.drumTypeId){
-      html += '<div class="stock-hint">보유 고철 재고 <b class="num">' + fmtNum(computeScrapStock(STATE, scrapDraft.drumTypeId)) + '개</b></div>';
-    }
-    if (scrapErrors.drumTypeId) html += '<div class="err">' + esc(scrapErrors.drumTypeId) + '</div>';
-    html += '</div>';
 
-    html += '<div class="field"><label>구분</label><div class="seg">';
-    html += '<button type="button" class="' + (scrapDraft.kind==="sold"?"active":"") + '" data-action="setScrapKind" data-value="sold">매각</button>';
-    html += '<button type="button" class="' + (scrapDraft.kind==="disposed"?"active":"") + '" data-action="setScrapKind" data-value="disposed">폐기</button>';
-    html += '</div></div>';
+    html += '<div class="field"><label>폐기 수량</label></div>';
+    STATE.drumTypes.forEach(function(dt){
+      var scrapStock = computeScrapStock(STATE, dt.id);
+      var c = scrapDraft.disposed[dt.id] || { checked: false, qty: "" };
+      var cErr = (scrapErrors.disposed && scrapErrors.disposed[dt.id]) || {};
+      html += '<div class="check-row' + (c.checked?" checked":"") + '">';
+      html += '<label class="check-row-head"><input type="checkbox" data-field="scrapDisposedToggle" data-id="' + dt.id + '"' + (c.checked?" checked":"") + '><span>' + esc(dt.name) + '</span></label>';
+      if (c.checked){
+        html += '<div class="check-row-fields">';
+        html += '<div class="field">';
+        html += '<div class="stock-hint">보유 고철 재고 <b class="num">' + fmtNum(scrapStock) + '개</b></div>';
+        html += '</div>';
+        html += '<div class="field' + (cErr.qty?" has-err":"") + '">';
+        html += '<label>폐기 수량</label>';
+        html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="1" step="1" placeholder="0" data-field="scrapDisposedQty" data-id="' + dt.id + '" value="' + esc(c.qty) + '"><span class="unit">개</span></div>';
+        if (cErr.qty) html += '<div class="err">' + esc(cErr.qty) + '</div>';
+        html += '</div>';
+        html += '</div>';
+      }
+      html += '</div>';
+    });
 
-    html += '<div class="field' + (scrapErrors.qty?" has-err":"") + '">';
-    html += '<label for="f-scrapQty">수량</label>';
-    html += '<div class="qty-wrap"><input class="input" id="f-scrapQty" type="number" inputmode="numeric" min="1" step="1" placeholder="0" data-field="scrapQty" value="' + esc(scrapDraft.qty) + '"><span class="unit">개</span></div>';
-    if (scrapErrors.qty) html += '<div class="err">' + esc(scrapErrors.qty) + '</div>';
-    html += '</div>';
+    if (scrapErrors.noneChecked) html += '<div class="err" style="margin:-6px 0 14px">' + esc(scrapErrors.noneChecked) + '</div>';
 
     html += '<div class="field"><label for="f-scrapNote">비고 (선택)</label>';
     html += '<textarea class="input" id="f-scrapNote" data-field="scrapNote" placeholder="메모가 있다면 남겨주세요">' + esc(scrapDraft.note) + '</textarea></div>';
 
-    var btnLabel = scrapDraft.kind === "sold" ? "매각 등록" : "폐기 등록";
-    var btnCls = scrapDraft.kind === "sold" ? "in-btn" : "out-btn";
-    html += '<button type="submit" class="btn ' + btnCls + '"' + (isReadOnly ? " disabled" : "") + '>' + btnLabel + '</button>';
+    html += '<button type="submit" class="btn out-btn"' + (isReadOnly ? " disabled" : "") + '>매각·폐기 등록</button>';
     html += '</form>';
 
     html += '<div class="section-title">최근 매각·폐기 기록</div>';
@@ -1148,35 +1184,79 @@
     return html;
   }
 
-  function setScrapKind(v){
-    scrapDraft.kind = (v === "disposed") ? "disposed" : "sold";
-    render();
+  function scrapEntryHasErrors(errors){
+    if (errors.date || errors.noneChecked) return true;
+    if (errors.sold && Object.keys(errors.sold).some(function(id){ return errors.sold[id] && Object.keys(errors.sold[id]).length > 0; })) return true;
+    if (errors.disposed && Object.keys(errors.disposed).some(function(id){ return errors.disposed[id] && Object.keys(errors.disposed[id]).length > 0; })) return true;
+    return false;
+  }
+
+  function validateScrapEntry(d){
+    var errors = { sold: {}, disposed: {} };
+    if (!d.date) errors.date = "날짜를 선택해주세요";
+    var anyChecked = false;
+
+    STATE.drumTypes.forEach(function(dt){
+      var avail = computeScrapStock(STATE, dt.id);
+      var used = 0;
+      var sc = d.sold[dt.id];
+      var dc = d.disposed[dt.id];
+      var sErr = {}, dErr = {};
+      if (sc && sc.checked){
+        anyChecked = true;
+        var sQty = parseInt(sc.qty, 10);
+        if (!sQty || sQty <= 0) sErr.qty = "수량을 입력해주세요";
+        else used += sQty;
+      }
+      if (dc && dc.checked){
+        anyChecked = true;
+        var dQty = parseInt(dc.qty, 10);
+        if (!dQty || dQty <= 0) dErr.qty = "수량을 입력해주세요";
+        else used += dQty;
+      }
+      if (used > avail){
+        var msg = "고철 재고보다 많아요 (현재 " + fmtNum(avail) + "개)";
+        if (sc && sc.checked && !sErr.qty) sErr.qty = msg;
+        if (dc && dc.checked && !dErr.qty) dErr.qty = msg;
+      }
+      if (Object.keys(sErr).length) errors.sold[dt.id] = sErr;
+      if (Object.keys(dErr).length) errors.disposed[dt.id] = dErr;
+    });
+
+    if (!anyChecked) errors.noneChecked = "매각 또는 폐기할 드럼 종류를 하나 이상 선택해주세요";
+    return errors;
   }
 
   function submitScrap(){
     if (isReadOnly) return;
-    var errors = {};
+    ensureScrapChecks(scrapDraft);
     if (!scrapDraft.date) scrapDraft.date = todayStr();
-    if (!scrapDraft.drumTypeId) errors.drumTypeId = "드럼 종류를 선택해주세요";
-    var qty = parseInt(scrapDraft.qty, 10);
-    if (!qty || qty <= 0) errors.qty = "수량을 입력해주세요";
-    else if (scrapDraft.drumTypeId){
-      var avail = computeScrapStock(STATE, scrapDraft.drumTypeId);
-      if (qty > avail) errors.qty = "고철 재고보다 많아요 (현재 " + fmtNum(avail) + "개)";
-    }
+    var errors = validateScrapEntry(scrapDraft);
     scrapErrors = errors;
-    if (Object.keys(errors).length){ render(); return; }
+    if (scrapEntryHasErrors(errors)){ render(); return; }
 
-    var tx = {
-      id: genId(), type: scrapDraft.kind, date: scrapDraft.date, drumTypeId: scrapDraft.drumTypeId,
-      qty: qty, note: (scrapDraft.note || "").trim(), ts: Date.now()
-    };
-    var newState = Object.assign({}, STATE, { transactions: STATE.transactions.concat([tx]) });
-    var flashMsg = scrapDraft.kind === "sold" ? "매각을 등록했어요" : "폐기를 등록했어요";
+    var txs = [];
+    var ts0 = Date.now();
+    var seq = 0;
+    var note = (scrapDraft.note || "").trim();
 
-    publishState(newState, { flash: flashMsg }).then(function(res){
+    STATE.drumTypes.forEach(function(dt){
+      var sc = scrapDraft.sold[dt.id];
+      if (sc && sc.checked){
+        txs.push({ id: genId(), type: "sold", date: scrapDraft.date, drumTypeId: dt.id, qty: parseInt(sc.qty, 10), note: note, ts: ts0 + (seq++) });
+      }
+      var dc = scrapDraft.disposed[dt.id];
+      if (dc && dc.checked){
+        txs.push({ id: genId(), type: "disposed", date: scrapDraft.date, drumTypeId: dt.id, qty: parseInt(dc.qty, 10), note: note, ts: ts0 + (seq++) });
+      }
+    });
+
+    var newState = Object.assign({}, STATE, { transactions: STATE.transactions.concat(txs) });
+
+    publishState(newState, { flash: "매각·폐기를 등록했어요" }).then(function(res){
       if (res.ok){
-        scrapDraft = { date: todayStr(), drumTypeId: scrapDraft.drumTypeId, kind: scrapDraft.kind, qty: "", note: "" };
+        scrapDraft = { date: scrapDraft.date, sold: {}, disposed: {}, note: "" };
+        ensureScrapChecks(scrapDraft);
         scrapErrors = {};
         render();
       } else {
@@ -1304,10 +1384,11 @@
     return html;
   }
 
-  /* ---------- render: out form (dropdown + add-row list) ---------- */
+  /* ---------- render: out form (checkbox list, one row per drum type) ---------- */
   function renderOutForm(){
     var d = formDrafts["out"];
-    var err = formErrors["out"] || { items: [] };
+    ensureOutChecks(d);
+    var err = formErrors["out"] || { checks: {}, otherCheck: {} };
     var stock = computeStock(STATE);
     var partyLabel = "용도 / 출고처";
     var partyPh = "예: 세척 후 재사용";
@@ -1315,50 +1396,55 @@
     var html = '<form data-form="out" data-action-submit="out">';
     html += '<div class="section-title">공드럼 출고 등록</div>';
 
-    if (STATE.drumTypes.length === 0){
+    if (STATE.drumTypes.length === 0 && !d.otherChecked){
       html += '<div class="empty">먼저 드럼 종류를 등록해주세요.<br><a href="#" class="cta" data-action="switchTab" data-tab="settings">드럼 종류 추가하기 →</a></div>';
       return html + "</form>";
     }
 
     html += field("date","날짜","date", d.date || todayStr(), err.date);
 
-    html += '<div class="field"><label>드럼 종류·수량</label></div>';
-    d.items.forEach(function(item, idx){
-      var itemErr = (err.items && err.items[idx]) || {};
-      html += '<div class="item-row">';
-      html += '<div class="item-row-top">';
-      html += '<div class="item-row-main">';
-      html += '<div class="field' + (itemErr.drumTypeId?" has-err":"") + '">';
-      html += '<select class="input" data-field="itemDrumTypeId" data-idx="' + idx + '">';
-      html += '<option value="">드럼 종류 선택</option>';
-      STATE.drumTypes.forEach(function(dt){
-        var sel = item.drumTypeId === dt.id ? " selected" : "";
-        html += '<option value="' + dt.id + '"' + sel + '>' + esc(dt.name) + '</option>';
-      });
-      html += '<option value="' + OTHER_DRUM_ID + '"' + (item.drumTypeId === OTHER_DRUM_ID ? " selected" : "") + '>기타 (직접 입력)</option>';
-      html += '</select>';
-      if (itemErr.drumTypeId) html += '<div class="err">' + esc(itemErr.drumTypeId) + '</div>';
-      if (item.drumTypeId === OTHER_DRUM_ID){
-        html += '<input class="input" style="margin-top:6px" data-field="itemDrumTypeOther" data-idx="' + idx + '" placeholder="예: 100L 철드럼" value="' + esc(item.drumTypeOther) + '">';
-        if (itemErr.drumTypeOther) html += '<div class="err">' + esc(itemErr.drumTypeOther) + '</div>';
-      }
-      if (item.drumTypeId && item.drumTypeId !== OTHER_DRUM_ID){
-        html += '<div class="stock-hint">현재 재고 <b class="num">' + fmtNum(stock[item.drumTypeId] || 0) + '개</b></div>';
-      }
-      html += '</div>';
-      html += '</div>';
-      html += '<div class="item-row-qty">';
-      html += '<div class="field' + (itemErr.qty?" has-err":"") + '">';
-      html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="1" step="1" placeholder="0" data-field="itemQty" data-idx="' + idx + '" value="' + esc(item.qty) + '"><span class="unit">개</span></div>';
-      if (itemErr.qty) html += '<div class="err">' + esc(itemErr.qty) + '</div>';
-      html += '</div>';
-      html += '</div>';
-      if (d.items.length > 1){
-        html += '<button type="button" class="item-del" data-action="removeItem" data-kind="out" data-idx="' + idx + '" aria-label="이 항목 삭제">' + iconWrap(ICONS.close, 15) + '</button>';
+    html += '<div class="field"><label>드럼 종류별 수량</label></div>';
+
+    STATE.drumTypes.forEach(function(dt){
+      var c = d.checks[dt.id] || { checked: false, qty: "" };
+      var cErr = (err.checks && err.checks[dt.id]) || {};
+      html += '<div class="check-row' + (c.checked?" checked":"") + '">';
+      html += '<label class="check-row-head"><input type="checkbox" data-field="checkToggle" data-id="' + dt.id + '"' + (c.checked?" checked":"") + '><span>' + esc(dt.name) + '</span></label>';
+      if (c.checked){
+        html += '<div class="check-row-fields">';
+        html += '<div class="field">';
+        html += '<div class="stock-hint">현재 재고 <b class="num">' + fmtNum(stock[dt.id] || 0) + '개</b></div>';
+        html += '</div>';
+        html += '<div class="field' + (cErr.qty?" has-err":"") + '">';
+        html += '<label>출고수량</label>';
+        html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="1" step="1" placeholder="0" data-field="checkQty" data-id="' + dt.id + '" value="' + esc(c.qty) + '"><span class="unit">개</span></div>';
+        if (cErr.qty) html += '<div class="err">' + esc(cErr.qty) + '</div>';
+        html += '</div>';
+        html += '</div>';
       }
       html += '</div>';
     });
-    html += '<button type="button" class="btn ghost small" data-action="addItem" data-kind="out" style="margin-bottom:14px">+ 드럼 종류 추가</button>';
+
+    var otherErr = err.otherCheck || {};
+    html += '<div class="check-row' + (d.otherChecked?" checked":"") + '">';
+    html += '<label class="check-row-head"><input type="checkbox" data-field="otherToggle"' + (d.otherChecked?" checked":"") + '><span>기타 (직접 입력)</span></label>';
+    if (d.otherChecked){
+      html += '<div class="check-row-fields">';
+      html += '<div class="field' + (otherErr.name?" has-err":"") + '">';
+      html += '<label>드럼 종류 이름</label>';
+      html += '<input class="input" data-field="otherName" placeholder="예: 100L 철드럼" value="' + esc(d.otherName) + '">';
+      if (otherErr.name) html += '<div class="err">' + esc(otherErr.name) + '</div>';
+      html += '</div>';
+      html += '<div class="field' + (otherErr.qty?" has-err":"") + '">';
+      html += '<label>출고수량</label>';
+      html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="1" step="1" placeholder="0" data-field="otherQty" value="' + esc(d.otherQty) + '"><span class="unit">개</span></div>';
+      if (otherErr.qty) html += '<div class="err">' + esc(otherErr.qty) + '</div>';
+      html += '</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+
+    if (err.noneChecked) html += '<div class="err" style="margin:-6px 0 14px">' + esc(err.noneChecked) + '</div>';
 
     html += '<div class="field' + (err.partyId?" has-err":"") + '">';
     html += '<label for="f-partyId">' + esc(partyLabel) + '</label>';
@@ -1613,70 +1699,65 @@
     return { id: newType.id, drumTypes: drumTypes.concat([newType]) };
   }
 
-  function entryHasErrors(errors){
-    if (errors.date || errors.partyId || errors.party || errors.handler) return true;
-    return errors.items.some(function(e){ return e && Object.keys(e).length > 0; });
+  function outEntryHasErrors(errors){
+    if (errors.date || errors.partyId || errors.party || errors.handler || errors.noneChecked) return true;
+    if (errors.checks && Object.keys(errors.checks).some(function(id){ return errors.checks[id] && Object.keys(errors.checks[id]).length > 0; })) return true;
+    if (errors.otherCheck && Object.keys(errors.otherCheck).length > 0) return true;
+    return false;
   }
 
-  function validateEntry(kind, d){
-    var errors = { items: [] };
+  function validateOutEntry(d){
+    var errors = { checks: {}, otherCheck: {} };
     if (!d.date) errors.date = "날짜를 선택해주세요";
 
     var stock = computeStock(STATE);
-    var outTotals = {}; // resolved drumTypeId (or a per-name placeholder) -> summed qty across rows
-    d.items.forEach(function(item, idx){
-      var itemErr = {};
-      if (!item.drumTypeId) itemErr.drumTypeId = "드럼 종류를 선택해주세요";
-      else if (item.drumTypeId === OTHER_DRUM_ID && (!item.drumTypeOther || !item.drumTypeOther.trim())) itemErr.drumTypeOther = "드럼 종류를 입력해주세요";
-      var qty = parseInt(item.qty, 10);
-      if (!qty || qty <= 0) itemErr.qty = "수량을 입력해주세요";
-      if (kind === "in" && session && session.role === "admin" && item.goodQty !== "" && item.goodQty != null){
-        var goodQty = parseInt(item.goodQty, 10);
-        if (isNaN(goodQty) || goodQty < 0) itemErr.goodQty = "0 이상의 숫자를 입력해주세요";
-        else if (!itemErr.qty && goodQty > qty) itemErr.goodQty = "입고수량보다 클 수 없어요";
-      }
-      errors.items[idx] = itemErr;
+    var anyChecked = false;
 
-      if (kind === "out" && !itemErr.drumTypeId && !itemErr.drumTypeOther && !itemErr.qty){
-        var stockId = item.drumTypeId;
-        if (stockId === OTHER_DRUM_ID){
-          var existingType = STATE.drumTypes.filter(function(t){ return t.name === item.drumTypeOther.trim(); })[0];
-          stockId = existingType ? existingType.id : ("__new__" + item.drumTypeOther.trim());
-        }
-        outTotals[stockId] = (outTotals[stockId] || 0) + qty;
+    STATE.drumTypes.forEach(function(dt){
+      var c = d.checks[dt.id];
+      if (!c || !c.checked) return;
+      anyChecked = true;
+      var cErr = {};
+      var qty = parseInt(c.qty, 10);
+      if (!qty || qty <= 0) cErr.qty = "수량을 입력해주세요";
+      else {
+        var avail = stock[dt.id] || 0;
+        if (qty > avail) cErr.qty = "재고보다 많아요 (현재 " + fmtNum(avail) + "개)";
       }
+      if (Object.keys(cErr).length) errors.checks[dt.id] = cErr;
     });
 
-    if (kind === "out"){
-      Object.keys(outTotals).forEach(function(id){
-        var avail = id.indexOf("__new__") === 0 ? 0 : (stock[id] || 0);
-        if (outTotals[id] <= avail) return;
-        d.items.forEach(function(item, idx){
-          if (errors.items[idx].qty) return; // already flagged for its own reason
-          var thisId = item.drumTypeId;
-          if (thisId === OTHER_DRUM_ID){
-            var existingType = STATE.drumTypes.filter(function(t){ return t.name === (item.drumTypeOther || "").trim(); })[0];
-            thisId = existingType ? existingType.id : ("__new__" + (item.drumTypeOther || "").trim());
-          }
-          if (thisId === id) errors.items[idx].qty = "재고보다 많아요 (현재 " + fmtNum(avail) + "개)";
-        });
-      });
+    if (d.otherChecked){
+      anyChecked = true;
+      var oErr = {};
+      if (!d.otherName || !d.otherName.trim()) oErr.name = "드럼 종류를 입력해주세요";
+      var oQty = parseInt(d.otherQty, 10);
+      if (!oQty || oQty <= 0) oErr.qty = "수량을 입력해주세요";
+      else {
+        var existingType = STATE.drumTypes.filter(function(t){ return t.name === (d.otherName || "").trim(); })[0];
+        var avail = existingType ? (stock[existingType.id] || 0) : 0;
+        if (oQty > avail) oErr.qty = "재고보다 많아요 (현재 " + fmtNum(avail) + "개)";
+      }
+      if (Object.keys(oErr).length) errors.otherCheck = oErr;
     }
 
-    if (!d.partyId) errors.partyId = "공급처를 선택해주세요";
-    else if (d.partyId === OTHER_PARTY_ID && (!d.party || !d.party.trim())) errors.party = kind === "in" ? "공급처를 입력해주세요" : "용도나 출고처를 입력해주세요";
+    if (!anyChecked) errors.noneChecked = "드럼 종류를 하나 이상 선택해주세요";
+
+    if (!d.partyId) errors.partyId = "용도나 출고처를 선택해주세요";
+    else if (d.partyId === OTHER_PARTY_ID && (!d.party || !d.party.trim())) errors.party = "용도나 출고처를 입력해주세요";
     var isDriver = session && session.role === "driver";
     if (!isDriver && (!d.handler || !d.handler.trim())) errors.handler = "담당자를 입력해주세요";
     return errors;
   }
 
-  function submitEntry(kind){
-    if (!session || isReadOnly || submitting[kind]) return;
-    var d = formDrafts[kind];
+  function submitOutEntry(){
+    if (!session || isReadOnly || submitting["out"]) return;
+    var d = formDrafts["out"];
+    ensureOutChecks(d);
     if (!d.date) d.date = todayStr();
-    var errors = validateEntry(kind, d);
-    formErrors[kind] = errors;
-    if (entryHasErrors(errors)){ render(); return; }
+    var errors = validateOutEntry(d);
+    formErrors["out"] = errors;
+    if (outEntryHasErrors(errors)){ render(); return; }
 
     var isDriver = session.role === "driver";
     var handlerName = isDriver ? session.name : d.handler.trim();
@@ -1685,7 +1766,7 @@
       partyId = null;
       partyName = d.party.trim();
     } else {
-      var pMatch = STATE[partiesKey(kind)].filter(function(p){ return p.id === d.partyId; })[0];
+      var pMatch = STATE.outParties.filter(function(p){ return p.id === d.partyId; })[0];
       partyId = d.partyId;
       partyName = pMatch ? pMatch.name : "";
     }
@@ -1694,44 +1775,55 @@
     var resultItems = [];
     var txs = [];
     var ts0 = Date.now();
-    d.items.forEach(function(item, i){
-      var resolved = resolveDrumType(item, newDrumTypes);
-      newDrumTypes = resolved.drumTypes;
-      var qty = parseInt(item.qty, 10);
-      var dtObj = newDrumTypes.filter(function(t){ return t.id === resolved.id; })[0];
-      var goodQty = qty;
-      if (kind === "in" && !isDriver && item.goodQty !== "" && item.goodQty != null){
-        goodQty = parseInt(item.goodQty, 10);
-      }
-      resultItems.push({ name: dtObj ? dtObj.name : "", qty: qty, goodQty: kind === "in" ? goodQty : null });
-      var tx = {
-        id: genId(), type: kind, date: d.date, drumTypeId: resolved.id,
+    var seq = 0;
+
+    STATE.drumTypes.forEach(function(dt){
+      var c = d.checks[dt.id];
+      if (!c || !c.checked) return;
+      var qty = parseInt(c.qty, 10);
+      resultItems.push({ name: dt.name, qty: qty, goodQty: null });
+      txs.push({
+        id: genId(), type: "out", date: d.date, drumTypeId: dt.id,
         qty: qty, party: partyName, partyId: partyId, handler: handlerName,
         driverId: isDriver ? session.driverId : null,
-        note: (d.note || "").trim(), ts: ts0 + i
-      };
-      if (kind === "in") tx.goodQty = goodQty;
-      txs.push(tx);
+        note: (d.note || "").trim(), ts: ts0 + (seq++)
+      });
     });
+
+    if (d.otherChecked){
+      var resolved = resolveDrumType({ drumTypeId: OTHER_DRUM_ID, drumTypeOther: d.otherName }, newDrumTypes);
+      newDrumTypes = resolved.drumTypes;
+      var oQty = parseInt(d.otherQty, 10);
+      var dtObj = newDrumTypes.filter(function(t){ return t.id === resolved.id; })[0];
+      resultItems.push({ name: dtObj ? dtObj.name : "", qty: oQty, goodQty: null });
+      txs.push({
+        id: genId(), type: "out", date: d.date, drumTypeId: resolved.id,
+        qty: oQty, party: partyName, partyId: partyId, handler: handlerName,
+        driverId: isDriver ? session.driverId : null,
+        note: (d.note || "").trim(), ts: ts0 + (seq++)
+      });
+    }
+
     var newState = Object.assign({}, STATE, { drumTypes: newDrumTypes, transactions: STATE.transactions.concat(txs) });
     if (!isDriver) saveLastHandler(handlerName);
 
-    submitting[kind] = true; render();
-    publishState(newState, { flash: (kind==="in"?"입고를 등록했어요":"출고를 등록했어요"), keepTab: kind }).then(function(res){
-      submitting[kind] = false;
+    submitting["out"] = true; render();
+    publishState(newState, { flash: "출고를 등록했어요", keepTab: "out" }).then(function(res){
+      submitting["out"] = false;
       if (res.ok){
-        lastResult[kind] = {
+        lastResult["out"] = {
           date: d.date, partyName: partyName, handlerName: handlerName,
           note: (d.note || "").trim(), items: resultItems
         };
-        formView[kind] = "result";
-        formDrafts[kind] = {
-          date: todayStr(),
-          items: [{ drumTypeId: "", drumTypeOther: "", qty: "", goodQty: "" }],
+        formView["out"] = "result";
+        formDrafts["out"] = {
+          date: todayStr(), checks: {},
+          otherChecked: false, otherName: "", otherQty: "",
           partyId: d.partyId, party: (d.partyId === OTHER_PARTY_ID ? "" : d.party),
           handler: d.handler, note: ""
         };
-        formErrors[kind] = { items: [{}] };
+        ensureOutChecks(formDrafts["out"]);
+        formErrors["out"] = { checks: {}, otherCheck: {} };
         ss_set(DRAFT_KEY, JSON.stringify(formDrafts));
         render();
       } else {
@@ -1883,17 +1975,6 @@
     });
   }
 
-  function addItem(kind){
-    formDrafts[kind].items.push({ drumTypeId: "", drumTypeOther: "", qty: "", goodQty: "" });
-    if (formErrors[kind] && formErrors[kind].items) formErrors[kind].items.push({});
-    render();
-  }
-  function removeItem(kind, idx){
-    if (formDrafts[kind].items.length <= 1) return;
-    formDrafts[kind].items.splice(idx, 1);
-    if (formErrors[kind] && formErrors[kind].items) formErrors[kind].items.splice(idx, 1);
-    render();
-  }
   function startNewEntry(kind){
     formView[kind] = "form";
     render();
@@ -2076,11 +2157,8 @@
     else if (action === "saveDriverEdit"){ saveDriverEdit(t.dataset.id); }
     else if (action === "deleteDriver"){ deleteDriver(t.dataset.id); }
     else if (action === "changeAdminPw"){ changeAdminPassword(); }
-    else if (action === "addItem"){ addItem(t.dataset.kind); }
-    else if (action === "removeItem"){ removeItem(t.dataset.kind, parseInt(t.dataset.idx, 10)); }
     else if (action === "startNewEntry"){ startNewEntry(t.dataset.kind); }
     else if (action === "downloadExcel"){ downloadExcel(); }
-    else if (action === "setScrapKind"){ setScrapKind(t.dataset.value); }
   }
   function onSubmit(e){
     var f = e.target.closest("form[data-action-submit]");
@@ -2091,29 +2169,38 @@
     else if (kind === "loginAdmin"){ loginAdminSubmit(); }
     else if (kind === "scrap"){ submitScrap(); }
     else if (kind === "in"){ submitInEntry(); }
-    else { submitEntry(kind); }
+    else if (kind === "out"){ submitOutEntry(); }
   }
   function onInput(e){
     var el = e.target;
     if (!el.dataset || !el.dataset.field) return;
     if (el.dataset.field === "checkToggle" || el.dataset.field === "otherToggle") return; // handled in onChange
     if (el.dataset.field === "checkQty" || el.dataset.field === "checkGoodQty"){
+      var checkForm = el.closest("[data-form]");
+      var checkKind = checkForm && formDrafts[checkForm.dataset.form] ? checkForm.dataset.form : "in";
       var checkId = el.dataset.id;
-      var dIn = formDrafts["in"];
-      if (!dIn.checks[checkId]) dIn.checks[checkId] = { checked: false, qty: "", goodQty: "" };
-      dIn.checks[checkId][el.dataset.field === "checkGoodQty" ? "goodQty" : "qty"] = el.value;
+      var dCheck = formDrafts[checkKind];
+      if (!dCheck.checks[checkId]) dCheck.checks[checkId] = { checked: false, qty: "", goodQty: "" };
+      dCheck.checks[checkId][el.dataset.field === "checkGoodQty" ? "goodQty" : "qty"] = el.value;
       scheduleDraftSave();
       return;
     }
     if (el.dataset.field === "otherName" || el.dataset.field === "otherQty" || el.dataset.field === "otherGoodQty"){
-      formDrafts["in"][el.dataset.field] = el.value;
+      var otherForm = el.closest("[data-form]");
+      var otherKind = otherForm && formDrafts[otherForm.dataset.form] ? otherForm.dataset.form : "in";
+      formDrafts[otherKind][el.dataset.field] = el.value;
       scheduleDraftSave();
       return;
     }
     if (el.dataset.field === "reportDate"){ reportDate = el.value; render(); return; }
     if (el.dataset.field === "scrapDate"){ scrapDraft.date = el.value; return; }
-    if (el.dataset.field === "scrapDrumTypeId"){ scrapDraft.drumTypeId = el.value; return; }
-    if (el.dataset.field === "scrapQty"){ scrapDraft.qty = el.value; return; }
+    if (el.dataset.field === "scrapSoldQty" || el.dataset.field === "scrapDisposedQty"){
+      var scrapId = el.dataset.id;
+      var bucket = el.dataset.field === "scrapSoldQty" ? scrapDraft.sold : scrapDraft.disposed;
+      if (!bucket[scrapId]) bucket[scrapId] = { checked: false, qty: "" };
+      bucket[scrapId].qty = el.value;
+      return;
+    }
     if (el.dataset.field === "scrapNote"){ scrapDraft.note = el.value; return; }
     if (el.dataset.field === "editType"){ editingTypeValue = el.value; return; }
     if (el.dataset.field === "addType"){ formDrafts.addType = el.value; scheduleDraftSave(); return; }
@@ -2121,18 +2208,6 @@
     if (el.dataset.field === "addParty"){ formDrafts.addParty[el.dataset.kind] = el.value; scheduleDraftSave(); return; }
     if (el.dataset.field === "editDriverName"){ editingDriverName = el.value; return; }
     if (el.dataset.field === "editDriverPin"){ editingDriverPin = el.value; return; }
-    if (el.dataset.field === "itemDrumTypeId" || el.dataset.field === "itemDrumTypeOther" || el.dataset.field === "itemQty" || el.dataset.field === "itemGoodQty"){
-      var itemForm = el.closest("[data-form]");
-      if (!itemForm) return;
-      var itemKind = itemForm.dataset.form;
-      var idx = parseInt(el.dataset.idx, 10);
-      var items = formDrafts[itemKind] && formDrafts[itemKind].items;
-      if (!items || !items[idx]) return;
-      var itemKey = el.dataset.field === "itemDrumTypeId" ? "drumTypeId" : el.dataset.field === "itemDrumTypeOther" ? "drumTypeOther" : el.dataset.field === "itemGoodQty" ? "goodQty" : "qty";
-      items[idx][itemKey] = el.value;
-      scheduleDraftSave();
-      return;
-    }
     var form = el.closest("[data-form]");
     if (form){
       var kind = form.dataset.form;
@@ -2149,23 +2224,43 @@
     var el = e.target;
     if (el.dataset && el.dataset.action === "setHistoryDrum"){ setHistoryDrum(el.value); return; }
     if (el.dataset && el.dataset.field === "checkToggle"){
+      var toggleForm = el.closest("[data-form]");
+      var toggleKind = toggleForm && formDrafts[toggleForm.dataset.form] ? toggleForm.dataset.form : "in";
       var checkId = el.dataset.id;
-      var dIn = formDrafts["in"];
-      ensureInChecks(dIn);
-      if (!dIn.checks[checkId]) dIn.checks[checkId] = { checked: false, qty: "", goodQty: "" };
-      dIn.checks[checkId].checked = el.checked;
+      var dToggle = formDrafts[toggleKind];
+      if (toggleKind === "in") ensureInChecks(dToggle); else ensureOutChecks(dToggle);
+      if (!dToggle.checks[checkId]) dToggle.checks[checkId] = { checked: false, qty: "", goodQty: "" };
+      dToggle.checks[checkId].checked = el.checked;
       scheduleDraftSave();
       render();
       return;
     }
     if (el.dataset && el.dataset.field === "otherToggle"){
-      formDrafts["in"].otherChecked = el.checked;
+      var otherToggleForm = el.closest("[data-form]");
+      var otherToggleKind = otherToggleForm && formDrafts[otherToggleForm.dataset.form] ? otherToggleForm.dataset.form : "in";
+      formDrafts[otherToggleKind].otherChecked = el.checked;
       scheduleDraftSave();
       render();
       return;
     }
+    if (el.dataset && el.dataset.field === "scrapSoldToggle"){
+      var soldId = el.dataset.id;
+      ensureScrapChecks(scrapDraft);
+      if (!scrapDraft.sold[soldId]) scrapDraft.sold[soldId] = { checked: false, qty: "" };
+      scrapDraft.sold[soldId].checked = el.checked;
+      render();
+      return;
+    }
+    if (el.dataset && el.dataset.field === "scrapDisposedToggle"){
+      var disposedId = el.dataset.id;
+      ensureScrapChecks(scrapDraft);
+      if (!scrapDraft.disposed[disposedId]) scrapDraft.disposed[disposedId] = { checked: false, qty: "" };
+      scrapDraft.disposed[disposedId].checked = el.checked;
+      render();
+      return;
+    }
     onInput(e);
-    if (el.dataset && (el.dataset.field === "partyId" || el.dataset.field === "itemDrumTypeId" || el.dataset.field === "itemGoodQty" || el.dataset.field === "itemQty" || el.dataset.field === "scrapDrumTypeId" || el.dataset.field === "checkQty" || el.dataset.field === "checkGoodQty" || el.dataset.field === "otherQty" || el.dataset.field === "otherGoodQty")){ render(); }
+    if (el.dataset && (el.dataset.field === "partyId" || el.dataset.field === "checkQty" || el.dataset.field === "checkGoodQty" || el.dataset.field === "otherQty" || el.dataset.field === "otherGoodQty" || el.dataset.field === "scrapSoldQty" || el.dataset.field === "scrapDisposedQty")){ render(); }
   }
 
   /* ---------- init ---------- */
