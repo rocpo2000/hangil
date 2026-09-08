@@ -522,12 +522,14 @@
     });
     return stock;
   }
+  // 매각·폐기 대기 물량: 하루 재생 드럼 수량(생산 실적)과는 완전히 무관한
+  // 별개의 값이라, "produced" 거래는 여기 계산에 넣지 않는다.
   function computeScrapStock(state, drumTypeId){
     var generated = 0, used = 0;
     state.transactions.forEach(function(t){
       if (t.drumTypeId !== drumTypeId) return;
       if (t.type === "in") generated += (t.qty - (t.goodQty != null ? t.goodQty : t.qty));
-      else if (t.type === "produced" || t.type === "sold" || t.type === "disposed") used += t.qty;
+      else if (t.type === "sold" || t.type === "disposed") used += t.qty;
     });
     return generated - used;
   }
@@ -1174,14 +1176,6 @@
     var isAdmin = session && session.role === "admin";
 
     var html = "";
-    if (isAdmin && STATE.drumTypes.length > 0){
-      var totalBacklogAll = 0;
-      STATE.drumTypes.forEach(function(dt){ totalBacklogAll += computeScrapStock(STATE, dt.id); });
-      html += '<div class="summary-card">';
-      html += '<div><div class="label">재생·매각·폐기 대기 물량</div><div class="value num">' + fmtNum(totalBacklogAll) + '<small>개</small></div></div>';
-      html += '<div class="meta">' + STATE.drumTypes.length + '종</div>';
-      html += '</div>';
-    }
     html += '<form data-form="in" data-action-submit="in">';
     html += '<div class="section-title">공드럼 입고 등록</div>';
 
@@ -1233,16 +1227,12 @@
     if (isAdmin){
       html += '<div class="field"><label>하루 재생 드럼 수량 (선택, 입고수량과 별도)</label></div>';
       STATE.drumTypes.forEach(function(dt){
-        var backlog = computeScrapStock(STATE, dt.id);
         var p = d.produced[dt.id] || { checked: false, qty: "" };
         var pErr = (err.produced && err.produced[dt.id]) || {};
         html += '<div class="check-row' + (p.checked?" checked":"") + '">';
         html += '<label class="check-row-head"><input type="checkbox" data-field="producedToggle" data-id="' + dt.id + '"' + (p.checked?" checked":"") + '><span>' + esc(dt.name) + '</span></label>';
         if (p.checked){
           html += '<div class="check-row-fields">';
-          html += '<div class="field">';
-          html += '<div class="stock-hint">재생·매각·폐기 대기 물량 <b class="num">' + fmtNum(backlog) + '개</b></div>';
-          html += '</div>';
           html += '<div class="field' + (pErr.qty?" has-err":"") + '">';
           html += '<label>재생 수량</label>';
           html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="1" step="1" placeholder="0" data-field="producedQty" data-id="' + dt.id + '" value="' + esc(p.qty) + '"><span class="unit">개</span></div>';
@@ -1964,7 +1954,8 @@
 
     // 하루 재생 드럼 수량은 입고수량과 완전히 별도의 체크리스트라, 그날
     // 입고를 체크하지 않은 종류도 재생 처리량만 독립적으로 등록할 수 있다.
-    // 다만 재생·매각·폐기 대기 물량(계산상 같은 풀)을 넘어설 수는 없다.
+    // 매각·폐기 대기 물량과는 무관한 값이라 그 물량을 넘는지는 확인하지
+    // 않는다 — 그냥 그날의 생산 실적을 있는 그대로 기록한다.
     if (isAdmin){
       STATE.drumTypes.forEach(function(dt){
         var p = d.produced[dt.id];
@@ -1973,10 +1964,6 @@
         var pErr = {};
         var pQty = parseInt(p.qty, 10);
         if (!pQty || pQty <= 0) pErr.qty = "수량을 입력해주세요";
-        else {
-          var backlog = computeScrapStock(STATE, dt.id);
-          if (pQty > backlog) pErr.qty = "재생·매각·폐기 대기 물량보다 많아요 (현재 " + fmtNum(backlog) + "개)";
-        }
         if (Object.keys(pErr).length) errors.produced[dt.id] = pErr;
       });
     }
@@ -2028,9 +2015,10 @@
     var seq = 0;
     var note = (d.note || "").trim();
 
-    // 드럼 종류별 입고수량: 재생 처리는 이제 별도 체크리스트에서 하므로,
-    // 여기서 등록되는 수량은 곧바로 재고가 되지 않고 재생·매각·폐기
-    // 대기 물량으로 쌓인다 (기사님은 예전처럼 전량 재고로 들어감).
+    // 드럼 종류별 입고수량: 하루 재생 드럼 수량은 이제 별도 체크리스트에서
+    // 독립적으로 등록하므로, 여기서 관리자가 등록하는 수량은 곧바로
+    // 재고가 되지 않고 매각·폐기 대기 물량으로 쌓인다 (기사님은 예전처럼
+    // 전량 재고로 들어감).
     STATE.drumTypes.forEach(function(dt){
       var c = d.checks[dt.id];
       if (!c || !c.checked) return;
