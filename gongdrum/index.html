@@ -323,8 +323,6 @@
   .login-mark{color:var(--accent);display:flex;justify-content:center;margin-bottom:10px;}
   .login-title{font-weight:900;font-size:19px;letter-spacing:-.01em;}
   .login-sub{font-size:12.5px;color:var(--ink-muted);margin-top:4px;margin-bottom:18px;}
-  .login-seg{justify-content:center;margin-bottom:18px;}
-  .login-seg button{flex:1;}
   .login-form{text-align:left;margin-top:4px;}
   .login-form .err{text-align:left;}
 
@@ -406,8 +404,7 @@
   var syncMode = "local"; // "claude" | "firebase" | "local"
   var hasSync = false;
   var isReadOnly = false;
-  var session = null; // { role:"admin" } | { role:"driver", driverId, name }
-  var loginMode = "driver";
+  var session = null; // { role:"admin", adminType, adminId, name } | { role:"driver", driverId, name }
   var loginError = "";
   var activeTab = "dashboard";
   var historyFilterType = "all";
@@ -416,13 +413,14 @@
   var pendingDeleteTx = null;
   var pendingDeleteType = null;
   var pendingDeleteDriver = null;
+  var pendingDeleteAdmin = null;
   var pendingDeleteParty = { "in": null, "out": null };
   var submitting = { "in": false, "out": false };
   var formView = { "in": "form", "out": "form" }; // "form" | "result"
   var lastResult = { "in": null, "out": null };
   var formErrors = {
     "in": { checks: {}, otherCheck: {} }, "out": { checks: {}, otherCheck: {}, scrapSold: {}, scrapDisposed: {} },
-    addType: "", addParty: { "in": "", "out": "" }, addDriver: "", adminPw: { production: "", general: "" }
+    addType: "", addParty: { "in": "", "out": "" }, addDriver: "", addAdmin: ""
   };
   var formDrafts = {
     "in": {
@@ -438,15 +436,21 @@
     },
     addType: "",
     addParty: { "in": "", "out": "" },
-    login: { driverId: "", pin: "", adminPw: "", adminType: "general" },
-    addDriver: { name: "", pin: "" },
-    adminPw: { production: "", general: "" }
+    login: { username: "", password: "" },
+    addDriver: { name: "", username: "", password: "" },
+    addAdmin: { name: "", username: "", password: "", type: "production" }
   };
   var editingTypeId = null;
   var editingTypeValue = "";
   var editingDriverId = null;
   var editingDriverName = "";
-  var editingDriverPin = "";
+  var editingDriverUsername = "";
+  var editingDriverPassword = "";
+  var editingAdminId = null;
+  var editingAdminName = "";
+  var editingAdminUsername = "";
+  var editingAdminPassword = "";
+  var editingAdminType = "production";
   var editingPartyId = { "in": null, "out": null };
   var editingPartyValue = { "in": "", "out": "" };
   var toastTimer = null;
@@ -560,6 +564,14 @@
   function partiesKey(kind){ return kind === "in" ? "inParties" : "outParties"; }
   function partyInUse(state, kind, id){
     return state.transactions.some(function(t){ return t.type === kind && t.partyId === id; });
+  }
+  // 로그인 아이디는 기사님·관리자 계정을 통틀어 하나의 이름공간을 쓰므로
+  // 두 목록 모두에서 중복 여부를 확인한다.
+  function usernameTaken(state, username, excludeId){
+    var lower = (username || "").toLowerCase();
+    var inDrivers = state.drivers.some(function(dr){ return dr.id !== excludeId && dr.username.toLowerCase() === lower; });
+    if (inDrivers) return true;
+    return state.admins.some(function(a){ return a.id !== excludeId && a.username.toLowerCase() === lower; });
   }
 
   /* ---------- persistence helpers (per-viewer, not shared) ---------- */
@@ -710,16 +722,38 @@
       ],
       transactions: [],
       drivers: [],
+      admins: [
+        { id:"admin-default-general", username:"admin", name:"전체관리자", password:"admin1234", type:"general" }
+      ],
       inParties: [],
-      outParties: [],
-      adminPasswordProd: "admin1234",
-      adminPasswordGeneral: "admin1234"
+      outParties: []
     };
   }
   function normalizeState(s){
     if (!s || !Array.isArray(s.drumTypes)) s = defaultState();
     if (!Array.isArray(s.transactions)) s.transactions = [];
     if (!Array.isArray(s.drivers)) s.drivers = [];
+    // 기사님 로그인이 이름 선택 + PIN 방식이던 시절의 기록은 아이디·비밀번호
+    // 방식으로 옮겨준다 (이름을 아이디로, PIN을 비밀번호로 그대로 사용).
+    s.drivers = s.drivers.map(function(dr){
+      var out = Object.assign({}, dr);
+      if (typeof out.username !== "string" || !out.username) out.username = out.name || ("driver-" + out.id);
+      if (typeof out.password !== "string" || !out.password) out.password = out.pin || "0000";
+      delete out.pin;
+      return out;
+    });
+    // 생산관리자/전체관리자가 유형별 공용 비밀번호 하나만 쓰던 시절의 상태는
+    // 각 유형당 계정 하나씩으로 옮겨준다 (이후 설정에서 이름을 바꾸거나
+    // 계정을 더 추가할 수 있음).
+    if (!Array.isArray(s.admins)){
+      s.admins = [
+        { id: genId(), username: "production", name: "생산관리자", password: s.adminPasswordProd || s.adminPassword || "admin1234", type: "production" },
+        { id: genId(), username: "general", name: "전체관리자", password: s.adminPasswordGeneral || s.adminPassword || "admin1234", type: "general" }
+      ];
+    }
+    delete s.adminPasswordProd;
+    delete s.adminPasswordGeneral;
+    delete s.adminPassword;
     if (!Array.isArray(s.inParties) || !Array.isArray(s.outParties)){
       // migrate from the older single shared "parties" list, if present
       var legacy = Array.isArray(s.parties) ? s.parties : [];
@@ -727,11 +761,6 @@
       if (!Array.isArray(s.outParties)) s.outParties = legacy.slice();
     }
     delete s.parties;
-    // 생산관리자/전체관리자 비밀번호로 분리하기 전의 기존 상태는 두 유형이
-    // 같은 비밀번호로 시작하도록 옮겨준다 (이후에는 설정에서 각자 바꿀 수 있음).
-    if (typeof s.adminPasswordProd !== "string" || !s.adminPasswordProd) s.adminPasswordProd = s.adminPassword || "admin1234";
-    if (typeof s.adminPasswordGeneral !== "string" || !s.adminPasswordGeneral) s.adminPasswordGeneral = s.adminPassword || "admin1234";
-    delete s.adminPassword;
     return s;
   }
   function loadStateFromDOM(){
@@ -760,7 +789,7 @@
     var isAdmin = session.role === "admin";
     var syncState = isReadOnly ? "readonly" : (hasSync ? "live" : "local");
     var syncLabel = isReadOnly ? "읽기 전용" : (hasSync ? "실시간 동기화" : "이 브라우저에만 저장");
-    var whoLabel = isAdmin ? (session.adminType === "production" ? "생산관리자" : "전체관리자") : session.name;
+    var whoLabel = isAdmin ? (session.name + " (" + (session.adminType === "production" ? "생산관리자" : "전체관리자") + ")") : session.name;
 
     var content = "";
     if (activeTab === "settings" && isAdmin) content = renderSettings();
@@ -806,43 +835,16 @@
     var html = '<div class="login-wrap"><div class="login-card">';
     html += '<div class="login-mark">' + iconWrap(ICONS.drum, 38) + '</div>';
     html += '<div class="login-title">공드럼 입출고</div>';
-    html += '<div class="login-sub">로그인하고 시작하세요</div>';
-    html += '<div class="seg login-seg">';
-    html += '<button type="button" class="' + (loginMode==="driver"?"active":"") + '" data-action="setLoginMode" data-value="driver">기사 로그인</button>';
-    html += '<button type="button" class="' + (loginMode==="admin"?"active":"") + '" data-action="setLoginMode" data-value="admin">관리자 로그인</button>';
-    html += '</div>';
+    html += '<div class="login-sub">아이디와 비밀번호로 로그인하세요</div>';
     if (loginError) html += '<div class="err" style="text-align:center;margin-bottom:10px">' + esc(loginError) + '</div>';
 
-    if (loginMode === "driver"){
-      if (STATE.drivers.length === 0){
-        html += '<div class="empty">등록된 기사님이 없어요.<br>관리자에게 등록을 요청해주세요.</div>';
-      } else {
-        html += '<form class="login-form" data-form="login" data-action-submit="loginDriver">';
-        html += '<div class="field"><label for="f-driverId">이름</label>';
-        html += '<select class="input" id="f-driverId" data-field="driverId">';
-        html += '<option value="">선택해주세요</option>';
-        STATE.drivers.forEach(function(dr){
-          var sel = formDrafts.login.driverId === dr.id ? " selected" : "";
-          html += '<option value="' + dr.id + '"' + sel + '>' + esc(dr.name) + '</option>';
-        });
-        html += '</select></div>';
-        html += '<div class="field"><label for="f-pin">PIN 번호</label>';
-        html += '<input class="input" id="f-pin" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]*" placeholder="••••" data-field="pin" value="' + esc(formDrafts.login.pin) + '"></div>';
-        html += '<button type="submit" class="btn primary">로그인</button>';
-        html += '</form>';
-      }
-    } else {
-      var adminType = formDrafts.login.adminType === "production" ? "production" : "general";
-      html += '<form class="login-form" data-form="login" data-action-submit="loginAdmin">';
-      html += '<div class="field"><label>관리자 유형</label><div class="seg">';
-      html += '<button type="button" class="' + (adminType==="general"?"active":"") + '" data-action="setAdminLoginType" data-value="general">전체관리자</button>';
-      html += '<button type="button" class="' + (adminType==="production"?"active":"") + '" data-action="setAdminLoginType" data-value="production">생산관리자</button>';
-      html += '</div></div>';
-      html += '<div class="field"><label for="f-adminPw">' + (adminType==="production"?"생산관리자":"전체관리자") + ' 비밀번호</label>';
-      html += '<input class="input" id="f-adminPw" type="password" placeholder="비밀번호" data-field="adminPw" value="' + esc(formDrafts.login.adminPw) + '"></div>';
-      html += '<button type="submit" class="btn primary">로그인</button>';
-      html += '</form>';
-    }
+    html += '<form class="login-form" data-form="login" data-action-submit="loginUnified">';
+    html += '<div class="field"><label for="f-username">아이디</label>';
+    html += '<input class="input" id="f-username" type="text" autocomplete="username" placeholder="아이디" data-field="username" value="' + esc(formDrafts.login.username) + '"></div>';
+    html += '<div class="field"><label for="f-password">비밀번호</label>';
+    html += '<input class="input" id="f-password" type="password" autocomplete="current-password" placeholder="비밀번호" data-field="password" value="' + esc(formDrafts.login.password) + '"></div>';
+    html += '<button type="submit" class="btn primary">로그인</button>';
+    html += '</form>';
 
     html += '</div></div>';
     return html;
@@ -1502,45 +1504,74 @@
     html += renderPartySection("in", "입고 공급처 관리", "새 공급처 이름 (예: 대성상사)", "사용 중인 공급처는 삭제할 수 없어요");
     html += renderPartySection("out", "출고처 관리 (용도·출고처)", "새 출고처 이름 (예: 세척 후 재사용)", "사용 중인 출고처는 삭제할 수 없어요");
 
-    html += '<div class="section-title">기사 관리 (이름·PIN)</div>';
+    html += '<div class="section-title">기사님 계정 관리 (이름·아이디·비밀번호)</div>';
     if (STATE.drivers.length === 0){
       html += '<div class="empty">등록된 기사님이 없어요. 아래에서 추가해주세요.</div>';
     } else {
       STATE.drivers.forEach(function(dr){
         var pendingCls = pendingDeleteDriver === dr.id ? " pending" : "";
-        html += '<div class="type-row">';
+        html += '<div class="type-row" style="flex-wrap:wrap">';
         if (editingDriverId === dr.id){
-          html += '<input class="input" style="flex:1" data-field="editDriverName" value="' + esc(editingDriverName) + '">';
-          html += '<input class="input num" style="width:76px;flex:none" maxlength="4" inputmode="numeric" data-field="editDriverPin" value="' + esc(editingDriverPin) + '">';
+          html += '<input class="input" style="flex:1;min-width:90px" placeholder="이름" data-field="editDriverName" value="' + esc(editingDriverName) + '">';
+          html += '<input class="input" style="flex:1;min-width:90px" placeholder="아이디" data-field="editDriverUsername" value="' + esc(editingDriverUsername) + '">';
+          html += '<input class="input" style="flex:1;min-width:90px" placeholder="비밀번호 (4자 이상)" data-field="editDriverPassword" value="' + esc(editingDriverPassword) + '">';
           html += '<button type="button" data-action="saveDriverEdit" data-id="' + dr.id + '">저장</button>';
           html += '<button type="button" data-action="cancelDriverEdit">취소</button>';
         } else {
           html += '<span class="tname">' + esc(dr.name) + '</span>';
-          html += '<span class="tcount num">PIN ' + esc(dr.pin) + '</span>';
+          html += '<span class="tcount">ID ' + esc(dr.username) + '</span>';
           html += '<button type="button" data-action="startDriverEdit" data-id="' + dr.id + '" aria-label="정보 수정">수정</button>';
           html += '<button type="button" class="del' + pendingCls + '" data-action="deleteDriver" data-id="' + dr.id + '">' + (pendingDeleteDriver===dr.id ? "정말?" : "삭제") + '</button>';
         }
         html += '</div>';
       });
     }
-    html += '<div class="add-type-row" data-form="addDriver">';
-    html += '<input class="input" placeholder="기사님 이름" data-field="name" value="' + esc(formDrafts.addDriver.name) + '">';
-    html += '<input class="input num" style="max-width:92px;flex:none" placeholder="PIN 4자리" inputmode="numeric" maxlength="4" data-field="pin" value="' + esc(formDrafts.addDriver.pin) + '">';
+    html += '<div class="add-type-row" style="flex-wrap:wrap" data-form="addDriver">';
+    html += '<input class="input" style="flex:1;min-width:90px" placeholder="기사님 이름" data-field="name" value="' + esc(formDrafts.addDriver.name) + '">';
+    html += '<input class="input" style="flex:1;min-width:90px" placeholder="아이디" data-field="username" value="' + esc(formDrafts.addDriver.username) + '">';
+    html += '<input class="input" style="flex:1;min-width:90px" type="password" placeholder="비밀번호 (4자 이상)" data-field="password" value="' + esc(formDrafts.addDriver.password) + '">';
     html += '<button type="button" class="btn primary small" data-action="addDriver">추가</button>';
     html += '</div>';
     if (formErrors.addDriver) html += '<div class="err" style="margin-top:6px">' + esc(formErrors.addDriver) + '</div>';
 
-    html += '<div class="section-title">관리자 비밀번호</div>';
-    html += '<div class="add-type-row" data-form="adminPw">';
-    html += '<input class="input" type="password" placeholder="전체관리자 새 비밀번호 (4자 이상)" data-field="general" value="' + esc(formDrafts.adminPw.general) + '">';
-    html += '<button type="button" class="btn ghost small" data-action="changeAdminPw" data-type="general">변경</button>';
+    html += '<div class="section-title">관리자 계정 관리 (이름·아이디·비밀번호·유형)</div>';
+    if (STATE.admins.length === 0){
+      html += '<div class="empty">등록된 관리자 계정이 없어요. 아래에서 추가해주세요.</div>';
+    } else {
+      STATE.admins.forEach(function(a){
+        var pendingCls = pendingDeleteAdmin === a.id ? " pending" : "";
+        html += '<div class="type-row" style="flex-wrap:wrap">';
+        if (editingAdminId === a.id){
+          html += '<input class="input" style="flex:1;min-width:90px" placeholder="이름" data-field="editAdminName" value="' + esc(editingAdminName) + '">';
+          html += '<input class="input" style="flex:1;min-width:90px" placeholder="아이디" data-field="editAdminUsername" value="' + esc(editingAdminUsername) + '">';
+          html += '<input class="input" style="flex:1;min-width:90px" placeholder="비밀번호 (4자 이상)" data-field="editAdminPassword" value="' + esc(editingAdminPassword) + '">';
+          html += '<select class="input" style="flex:1;min-width:110px" data-field="editAdminType">';
+          html += '<option value="general"' + (editingAdminType==="general"?" selected":"") + '>전체관리자</option>';
+          html += '<option value="production"' + (editingAdminType==="production"?" selected":"") + '>생산관리자</option>';
+          html += '</select>';
+          html += '<button type="button" data-action="saveAdminEdit" data-id="' + a.id + '">저장</button>';
+          html += '<button type="button" data-action="cancelAdminEdit">취소</button>';
+        } else {
+          html += '<span class="tname">' + esc(a.name) + '</span>';
+          html += '<span class="tcount">ID ' + esc(a.username) + '</span>';
+          html += '<span class="tcount">' + (a.type==="production"?"생산관리자":"전체관리자") + '</span>';
+          html += '<button type="button" data-action="startAdminEdit" data-id="' + a.id + '" aria-label="정보 수정">수정</button>';
+          html += '<button type="button" class="del' + pendingCls + '" data-action="deleteAdmin" data-id="' + a.id + '"' + (STATE.admins.length<=1?' disabled title="마지막 남은 관리자 계정은 삭제할 수 없어요"':"") + '>' + (pendingDeleteAdmin===a.id ? "정말?" : "삭제") + '</button>';
+        }
+        html += '</div>';
+      });
+    }
+    html += '<div class="add-type-row" style="flex-wrap:wrap" data-form="addAdmin">';
+    html += '<input class="input" style="flex:1;min-width:90px" placeholder="관리자 이름" data-field="name" value="' + esc(formDrafts.addAdmin.name) + '">';
+    html += '<input class="input" style="flex:1;min-width:90px" placeholder="아이디" data-field="username" value="' + esc(formDrafts.addAdmin.username) + '">';
+    html += '<input class="input" style="flex:1;min-width:90px" type="password" placeholder="비밀번호 (4자 이상)" data-field="password" value="' + esc(formDrafts.addAdmin.password) + '">';
+    html += '<select class="input" style="flex:1;min-width:110px" data-field="type">';
+    html += '<option value="production"' + (formDrafts.addAdmin.type==="production"?" selected":"") + '>생산관리자</option>';
+    html += '<option value="general"' + (formDrafts.addAdmin.type==="general"?" selected":"") + '>전체관리자</option>';
+    html += '</select>';
+    html += '<button type="button" class="btn primary small" data-action="addAdmin">추가</button>';
     html += '</div>';
-    if (formErrors.adminPw.general) html += '<div class="err" style="margin-top:6px">' + esc(formErrors.adminPw.general) + '</div>';
-    html += '<div class="add-type-row" data-form="adminPw" style="margin-top:8px">';
-    html += '<input class="input" type="password" placeholder="생산관리자 새 비밀번호 (4자 이상)" data-field="production" value="' + esc(formDrafts.adminPw.production) + '">';
-    html += '<button type="button" class="btn ghost small" data-action="changeAdminPw" data-type="production">변경</button>';
-    html += '</div>';
-    if (formErrors.adminPw.production) html += '<div class="err" style="margin-top:6px">' + esc(formErrors.adminPw.production) + '</div>';
+    if (formErrors.addAdmin) html += '<div class="err" style="margin-top:6px">' + esc(formErrors.addAdmin) + '</div>';
 
     if (isReadOnly) html += '<div class="hint" style="margin-top:14px">읽기 전용 보기에서는 변경할 수 없어요.</div>';
     return html;
@@ -1565,48 +1596,47 @@
     render();
   }
 
-  function setLoginMode(v){
-    loginMode = (v === "admin") ? "admin" : "driver";
-    loginError = "";
-    render();
-  }
-
-  function setAdminLoginType(v){
-    formDrafts.login.adminType = (v === "production") ? "production" : "general";
-    loginError = "";
-    render();
-  }
-
-  function loginDriverSubmit(){
+  function loginUnified(){
     var d = formDrafts.login;
-    var driver = STATE.drivers.filter(function(x){ return x.id === d.driverId; })[0];
-    if (!driver || !d.pin || driver.pin !== d.pin){
-      loginError = "이름과 PIN을 다시 확인해주세요";
+    var username = (d.username || "").trim();
+    var password = d.password || "";
+    if (!username || !password){
+      loginError = "아이디와 비밀번호를 입력해주세요";
       render();
       return;
     }
-    loginError = "";
-    session = { role:"driver", driverId: driver.id, name: driver.name };
-    ls_set(SESSION_KEY, JSON.stringify(session));
-    formDrafts.login = { driverId:"", pin:"", adminPw:"", adminType:"general" };
-    activeTab = "in";
-    render();
-  }
-
-  function loginAdminSubmit(){
-    var d = formDrafts.login;
-    var adminType = d.adminType === "production" ? "production" : "general";
-    var expected = adminType === "production" ? STATE.adminPasswordProd : STATE.adminPasswordGeneral;
-    if (!d.adminPw || d.adminPw !== expected){
-      loginError = "비밀번호가 맞지 않아요";
+    var usernameLower = username.toLowerCase();
+    var driver = STATE.drivers.filter(function(x){ return x.username.toLowerCase() === usernameLower; })[0];
+    if (driver){
+      if (driver.password !== password){
+        loginError = "아이디 또는 비밀번호가 맞지 않아요";
+        render();
+        return;
+      }
+      loginError = "";
+      session = { role:"driver", driverId: driver.id, name: driver.name };
+      ls_set(SESSION_KEY, JSON.stringify(session));
+      formDrafts.login = { username:"", password:"" };
+      activeTab = "in";
       render();
       return;
     }
-    loginError = "";
-    session = { role:"admin", adminType: adminType };
-    ls_set(SESSION_KEY, JSON.stringify(session));
-    formDrafts.login = { driverId:"", pin:"", adminPw:"", adminType:"general" };
-    activeTab = "dashboard";
+    var admin = STATE.admins.filter(function(x){ return x.username.toLowerCase() === usernameLower; })[0];
+    if (admin){
+      if (admin.password !== password){
+        loginError = "아이디 또는 비밀번호가 맞지 않아요";
+        render();
+        return;
+      }
+      loginError = "";
+      session = { role:"admin", adminType: admin.type, adminId: admin.id, name: admin.name };
+      ls_set(SESSION_KEY, JSON.stringify(session));
+      formDrafts.login = { username:"", password:"" };
+      activeTab = "dashboard";
+      render();
+      return;
+    }
+    loginError = "아이디 또는 비밀번호가 맞지 않아요";
     render();
   }
 
@@ -2090,16 +2120,18 @@
   function addDriver(){
     if (isReadOnly) return;
     var name = (formDrafts.addDriver.name || "").trim();
-    var pin = (formDrafts.addDriver.pin || "").trim();
+    var username = (formDrafts.addDriver.username || "").trim();
+    var password = (formDrafts.addDriver.password || "").trim();
     var error = "";
     if (!name) error = "이름을 입력해주세요";
-    else if (!/^\d{4}$/.test(pin)) error = "PIN은 숫자 4자리로 입력해주세요";
-    else if (STATE.drivers.some(function(dr){ return dr.name === name; })) error = "이미 있는 이름이에요";
+    else if (!username) error = "아이디를 입력해주세요";
+    else if (password.length < 4) error = "비밀번호는 4자 이상 입력해주세요";
+    else if (usernameTaken(STATE, username, null)) error = "이미 사용 중인 아이디예요";
     if (error){ formErrors.addDriver = error; render(); return; }
     formErrors.addDriver = "";
-    var newDriver = { id: genId(), name: name, pin: pin };
+    var newDriver = { id: genId(), name: name, username: username, password: password };
     var newState = Object.assign({}, STATE, { drivers: STATE.drivers.concat([newDriver]) });
-    formDrafts.addDriver = { name:"", pin:"" };
+    formDrafts.addDriver = { name:"", username:"", password:"" };
     publishState(newState, { flash: "기사님을 등록했어요", keepTab: "settings" }).then(function(){ render(); });
   }
   function startDriverEdit(id){
@@ -2107,16 +2139,18 @@
     if (!dr) return;
     editingDriverId = id;
     editingDriverName = dr.name;
-    editingDriverPin = dr.pin;
+    editingDriverUsername = dr.username;
+    editingDriverPassword = dr.password;
     render();
   }
   function cancelDriverEdit(){ editingDriverId = null; render(); }
   function saveDriverEdit(id){
     var name = (editingDriverName || "").trim();
-    var pin = (editingDriverPin || "").trim();
-    if (!name || !/^\d{4}$/.test(pin)) return;
+    var username = (editingDriverUsername || "").trim();
+    var password = (editingDriverPassword || "").trim();
+    if (!name || !username || password.length < 4 || usernameTaken(STATE, username, id)) return;
     var newState = Object.assign({}, STATE, {
-      drivers: STATE.drivers.map(function(dr){ return dr.id === id ? Object.assign({}, dr, { name:name, pin:pin }) : dr; })
+      drivers: STATE.drivers.map(function(dr){ return dr.id === id ? Object.assign({}, dr, { name:name, username:username, password:password }) : dr; })
     });
     editingDriverId = null;
     publishState(newState, { flash: "기사 정보를 수정했어요", keepTab: "settings" }).then(function(){ render(); });
@@ -2129,18 +2163,54 @@
     publishState(newState, { flash: "기사님을 삭제했어요", keepTab: "settings" }).then(function(){ render(); });
   }
 
-  function changeAdminPassword(type){
+  function addAdmin(){
     if (isReadOnly) return;
-    var t = type === "production" ? "production" : "general";
-    var pw = (formDrafts.adminPw[t] || "").trim();
-    if (pw.length < 4){ formErrors.adminPw[t] = "4자 이상 입력해주세요"; render(); return; }
-    formErrors.adminPw[t] = "";
-    var patch = {};
-    patch[t === "production" ? "adminPasswordProd" : "adminPasswordGeneral"] = pw;
-    var newState = Object.assign({}, STATE, patch);
-    formDrafts.adminPw[t] = "";
-    var label = t === "production" ? "생산관리자" : "전체관리자";
-    publishState(newState, { flash: label + " 비밀번호를 변경했어요", keepTab: "settings" }).then(function(){ render(); });
+    var name = (formDrafts.addAdmin.name || "").trim();
+    var username = (formDrafts.addAdmin.username || "").trim();
+    var password = (formDrafts.addAdmin.password || "").trim();
+    var type = formDrafts.addAdmin.type === "general" ? "general" : "production";
+    var error = "";
+    if (!name) error = "이름을 입력해주세요";
+    else if (!username) error = "아이디를 입력해주세요";
+    else if (password.length < 4) error = "비밀번호는 4자 이상 입력해주세요";
+    else if (usernameTaken(STATE, username, null)) error = "이미 사용 중인 아이디예요";
+    if (error){ formErrors.addAdmin = error; render(); return; }
+    formErrors.addAdmin = "";
+    var newAdmin = { id: genId(), name: name, username: username, password: password, type: type };
+    var newState = Object.assign({}, STATE, { admins: STATE.admins.concat([newAdmin]) });
+    formDrafts.addAdmin = { name:"", username:"", password:"", type:"production" };
+    publishState(newState, { flash: "관리자 계정을 등록했어요", keepTab: "settings" }).then(function(){ render(); });
+  }
+  function startAdminEdit(id){
+    var a = STATE.admins.filter(function(x){ return x.id === id; })[0];
+    if (!a) return;
+    editingAdminId = id;
+    editingAdminName = a.name;
+    editingAdminUsername = a.username;
+    editingAdminPassword = a.password;
+    editingAdminType = a.type;
+    render();
+  }
+  function cancelAdminEdit(){ editingAdminId = null; render(); }
+  function saveAdminEdit(id){
+    var name = (editingAdminName || "").trim();
+    var username = (editingAdminUsername || "").trim();
+    var password = (editingAdminPassword || "").trim();
+    var type = editingAdminType === "general" ? "general" : "production";
+    if (!name || !username || password.length < 4 || usernameTaken(STATE, username, id)) return;
+    var newState = Object.assign({}, STATE, {
+      admins: STATE.admins.map(function(a){ return a.id === id ? Object.assign({}, a, { name:name, username:username, password:password, type:type }) : a; })
+    });
+    editingAdminId = null;
+    publishState(newState, { flash: "관리자 정보를 수정했어요", keepTab: "settings" }).then(function(){ render(); });
+  }
+  function deleteAdmin(id){
+    if (isReadOnly) return;
+    if (STATE.admins.length <= 1) return; // 로그인 가능한 관리자 계정이 하나는 남아있어야 해요
+    if (pendingDeleteAdmin !== id){ pendingDeleteAdmin = id; render(); return; }
+    pendingDeleteAdmin = null;
+    var newState = Object.assign({}, STATE, { admins: STATE.admins.filter(function(a){ return a.id !== id; }) });
+    publishState(newState, { flash: "관리자 계정을 삭제했어요", keepTab: "settings" }).then(function(){ render(); });
   }
 
   /* ---------- event delegation ---------- */
@@ -2161,15 +2231,17 @@
     else if (action === "cancelPartyEdit"){ cancelPartyEdit(t.dataset.kind); }
     else if (action === "savePartyEdit"){ savePartyEdit(t.dataset.kind, t.dataset.id); }
     else if (action === "deleteParty"){ if (!t.disabled) deleteParty(t.dataset.kind, t.dataset.id); }
-    else if (action === "setLoginMode"){ setLoginMode(t.dataset.value); }
-    else if (action === "setAdminLoginType"){ setAdminLoginType(t.dataset.value); }
     else if (action === "logout"){ logout(); }
     else if (action === "addDriver"){ addDriver(); }
     else if (action === "startDriverEdit"){ startDriverEdit(t.dataset.id); }
     else if (action === "cancelDriverEdit"){ cancelDriverEdit(); }
     else if (action === "saveDriverEdit"){ saveDriverEdit(t.dataset.id); }
     else if (action === "deleteDriver"){ deleteDriver(t.dataset.id); }
-    else if (action === "changeAdminPw"){ changeAdminPassword(t.dataset.type); }
+    else if (action === "addAdmin"){ addAdmin(); }
+    else if (action === "startAdminEdit"){ startAdminEdit(t.dataset.id); }
+    else if (action === "cancelAdminEdit"){ cancelAdminEdit(); }
+    else if (action === "saveAdminEdit"){ saveAdminEdit(t.dataset.id); }
+    else if (action === "deleteAdmin"){ if (!t.disabled) deleteAdmin(t.dataset.id); }
     else if (action === "startNewEntry"){ startNewEntry(t.dataset.kind); }
     else if (action === "downloadExcel"){ downloadExcel(); }
   }
@@ -2178,8 +2250,7 @@
     if (!f) return;
     e.preventDefault();
     var kind = f.dataset.actionSubmit;
-    if (kind === "loginDriver"){ loginDriverSubmit(); }
-    else if (kind === "loginAdmin"){ loginAdminSubmit(); }
+    if (kind === "loginUnified"){ loginUnified(); }
     else if (kind === "in"){ submitInEntry(); }
     else if (kind === "out"){ submitOutEntry(); }
   }
@@ -2218,15 +2289,20 @@
     if (el.dataset.field === "editParty"){ editingPartyValue[el.dataset.kind] = el.value; return; }
     if (el.dataset.field === "addParty"){ formDrafts.addParty[el.dataset.kind] = el.value; scheduleDraftSave(); return; }
     if (el.dataset.field === "editDriverName"){ editingDriverName = el.value; return; }
-    if (el.dataset.field === "editDriverPin"){ editingDriverPin = el.value; return; }
+    if (el.dataset.field === "editDriverUsername"){ editingDriverUsername = el.value; return; }
+    if (el.dataset.field === "editDriverPassword"){ editingDriverPassword = el.value; return; }
+    if (el.dataset.field === "editAdminName"){ editingAdminName = el.value; return; }
+    if (el.dataset.field === "editAdminUsername"){ editingAdminUsername = el.value; return; }
+    if (el.dataset.field === "editAdminPassword"){ editingAdminPassword = el.value; return; }
+    if (el.dataset.field === "editAdminType"){ editingAdminType = el.value; return; }
     var form = el.closest("[data-form]");
     if (form){
       var kind = form.dataset.form;
       if (kind === "_addType" || kind === "_addParty") return; // already handled above by field name
       if (formDrafts[kind]) formDrafts[kind][el.dataset.field] = el.value;
-      // login / driver-PIN / admin-password fields hold credentials: keep them
-      // in memory only, never mirrored into sessionStorage.
-      if (kind !== "login" && kind !== "addDriver" && kind !== "adminPw"){
+      // login / new-account fields hold credentials: keep them in memory
+      // only, never mirrored into sessionStorage.
+      if (kind !== "login" && kind !== "addDriver" && kind !== "addAdmin"){
         scheduleDraftSave();
       }
     }
@@ -2282,10 +2358,12 @@
     if (!raw) return;
     try {
       var s = JSON.parse(raw);
-      if (s && s.role === "admin"){
-        session = { role: "admin", adminType: (s.adminType === "production" ? "production" : "general") };
-      } else if (s && s.role === "driver" && s.driverId && STATE.drivers.some(function(d){ return d.id === s.driverId; })){
-        session = s;
+      var admin = s && s.role === "admin" && s.adminId ? STATE.admins.filter(function(a){ return a.id === s.adminId; })[0] : null;
+      var driver = s && s.role === "driver" && s.driverId ? STATE.drivers.filter(function(d){ return d.id === s.driverId; })[0] : null;
+      if (admin){
+        session = { role: "admin", adminType: admin.type, adminId: admin.id, name: admin.name };
+      } else if (driver){
+        session = { role: "driver", driverId: driver.id, name: driver.name };
       } else {
         ls_del(SESSION_KEY);
       }
