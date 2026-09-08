@@ -922,19 +922,26 @@
   }
 
   /* ---------- render: tx row ---------- */
+  var HISTORY_PILL = { in: "입고", out: "출고", produced: "재생" };
+
   function renderTxRow(t, withDelete){
-    var isIn = t.type === "in";
+    var txType = t.type;
+    var isPlus = txType === "in" || txType === "produced";
     var pendingCls = pendingDeleteTx === t.id ? " pending" : "";
     var html = '<div class="tx-row">';
-    html += '<span class="pill ' + (isIn?"in":"out") + '">' + (isIn ? "입고" : "출고") + '</span>';
+    html += '<span class="pill ' + (isPlus?"in":"out") + '">' + HISTORY_PILL[txType] + '</span>';
     html += '<div class="tx-main">';
     html += '<div class="tx-top"><span class="tx-drum">' + esc(drumName(t.drumTypeId)) + '</span>';
-    html += '<span class="tx-qty ' + (isIn?"in":"out") + ' num">' + (isIn?"+":"-") + fmtNum(t.qty) + '개</span></div>';
-    html += '<div class="tx-meta">' + fmtDate(t.date) + ' · ' + esc(t.party || "-") + ' · ' + esc(t.handler || "-") + '</div>';
-    if (isIn && !t.decoupled && t.goodQty != null && t.goodQty !== t.qty){
-      html += '<div class="tx-meta">재생 <b class="num">' + fmtNum(t.goodQty) + '개</b> · 고철 <b class="num">' + fmtNum(t.qty - t.goodQty) + '개</b></div>';
+    html += '<span class="tx-qty ' + (isPlus?"in":"out") + ' num">' + (isPlus?"+":"-") + fmtNum(t.qty) + '개</span></div>';
+    if (txType === "produced"){
+      html += '<div class="tx-meta">' + fmtDate(t.date) + '</div>';
+    } else {
+      html += '<div class="tx-meta">' + fmtDate(t.date) + ' · ' + esc(t.party || "-") + ' · ' + esc(t.handler || "-") + '</div>';
+      if (txType === "in" && !t.decoupled && t.goodQty != null && t.goodQty !== t.qty){
+        html += '<div class="tx-meta">재생 <b class="num">' + fmtNum(t.goodQty) + '개</b> · 고철 <b class="num">' + fmtNum(t.qty - t.goodQty) + '개</b></div>';
+      }
     }
-    if (isIn && t.adminType){
+    if (t.adminType){
       html += '<div class="tx-meta">' + (t.adminType === "production" ? "생산관리자" : "전체관리자") + ' 등록</div>';
     }
     if (t.note) html += '<div class="tx-note">' + esc(t.note) + '</div>';
@@ -948,10 +955,13 @@
 
   /* ---------- render: history ---------- */
   function renderHistory(){
+    var isAdmin = session && session.role === "admin";
     var html = "";
     html += '<div class="filter-row">';
     html += '<div class="seg">';
-    [["all","전체"],["in","입고"],["out","출고"]].forEach(function(f){
+    var filters = [["all","전체"],["in","입고"],["out","출고"]];
+    if (isAdmin) filters.push(["produced","재생"]);
+    filters.forEach(function(f){
       html += '<button type="button" class="' + (historyFilterType===f[0]?"active":"") + '" data-action="setHistoryType" data-value="' + f[0] + '">' + f[1] + '</button>';
     });
     html += '</div>';
@@ -964,8 +974,9 @@
     html += '</div>';
 
     var restrictToOwn = session && session.role === "driver";
+    var allowedTypes = isAdmin ? ["in","out","produced"] : ["in","out"];
     var list = STATE.transactions.filter(function(t){
-      if (t.type !== "in" && t.type !== "out") return false;
+      if (allowedTypes.indexOf(t.type) === -1) return false;
       if (restrictToOwn){
         // Match records logged through this driver's own login (driverId),
         // and also older/admin-entered records where only the 담당자 name
@@ -990,13 +1001,16 @@
   /* ---------- render: daily report ---------- */
   function computeDailySummary(date){
     return STATE.drumTypes.map(function(dt){
-      var inQty = 0, outQty = 0;
+      var inQty = 0, outQty = 0, producedQty = 0;
       STATE.transactions.forEach(function(t){
         if (t.date !== date || t.drumTypeId !== dt.id) return;
         if (t.type === "in") inQty += t.qty;
         else if (t.type === "out") outQty += t.qty;
+        else if (t.type === "produced") producedQty += t.qty;
       });
-      return { id: dt.id, name: dt.name, in: inQty, out: outQty, net: inQty - outQty };
+      // 재고를 실제로 늘리는 건 재생 처리뿐이라, 그날의 순증감도 입고가
+      // 아니라 재생 기준으로 계산한다 (입고는 참고용으로 별도 표시).
+      return { id: dt.id, name: dt.name, in: inQty, out: outQty, produced: producedQty, net: producedQty - outQty };
     });
   }
 
@@ -1023,8 +1037,11 @@
     var summary = computeDailySummary(reportDate);
     var totalIn = summary.reduce(function(s,r){ return s + r.in; }, 0);
     var totalOut = summary.reduce(function(s,r){ return s + r.out; }, 0);
+    var totalProduced = summary.reduce(function(s,r){ return s + r.produced; }, 0);
     var partyGroups = computePartySummary(reportDate);
-    var hasActivity = partyGroups.length > 0;
+    var hasPartyActivity = partyGroups.length > 0;
+    var hasProducedActivity = STATE.transactions.some(function(t){ return t.type === "produced" && t.date === reportDate; });
+    var hasActivity = hasPartyActivity || hasProducedActivity;
 
     var html = "";
     html += '<div class="section-title">일일 입출고 현황</div>';
@@ -1033,13 +1050,13 @@
 
     html += '<div class="summary-card" style="margin-top:14px">';
     html += '<div><div class="label">' + fmtDate(reportDate) + ' 입고</div><div class="value num">' + fmtNum(totalIn) + '<small>개</small></div></div>';
-    html += '<div class="meta">출고 <b class="num">' + fmtNum(totalOut) + '</b>개</div>';
+    html += '<div class="meta">재생 <b class="num">' + fmtNum(totalProduced) + '</b>개 · 출고 <b class="num">' + fmtNum(totalOut) + '</b>개</div>';
     html += '</div>';
 
     html += '<button type="button" class="btn primary" data-action="downloadExcel" style="margin-top:14px"' + (hasActivity ? "" : " disabled") + '>엑셀로 다운로드</button>';
 
     html += '<div class="section-title">업체별 현황</div>';
-    if (!hasActivity){
+    if (!hasPartyActivity){
       html += '<div class="empty">이 날짜에 등록된 입출고 기록이 없어요.</div>';
     } else {
       partyGroups.forEach(function(g){
@@ -1064,10 +1081,11 @@
     if (!hasActivity){
       html += '<div class="empty">이 날짜에 등록된 입출고 기록이 없어요.</div>';
     } else {
-      html += '<div class="report-table-wrap"><table class="report-table"><thead><tr><th>드럼 종류</th><th>입고</th><th>출고</th><th>순증감</th></tr></thead><tbody>';
+      html += '<div class="report-table-wrap"><table class="report-table"><thead><tr><th>드럼 종류</th><th>입고</th><th>재생</th><th>출고</th><th>순증감</th></tr></thead><tbody>';
       summary.forEach(function(r){
         html += '<tr><td>' + esc(r.name) + '</td>';
         html += '<td class="num in">' + (r.in ? "+" + fmtNum(r.in) : "-") + '</td>';
+        html += '<td class="num in">' + (r.produced ? "+" + fmtNum(r.produced) : "-") + '</td>';
         html += '<td class="num out">' + (r.out ? "-" + fmtNum(r.out) : "-") + '</td>';
         html += '<td class="num">' + (r.net > 0 ? "+" : "") + fmtNum(r.net) + '</td></tr>';
       });
@@ -1102,13 +1120,24 @@
     });
 
     var summary = computeDailySummary(date);
-    var summaryRows = [["드럼 종류", "입고", "출고", "순증감"]];
-    summary.forEach(function(r){ summaryRows.push([r.name, r.in, r.out, r.net]); });
+    var summaryRows = [["드럼 종류", "입고", "재생", "출고", "순증감"]];
+    summary.forEach(function(r){ summaryRows.push([r.name, r.in, r.produced, r.out, r.net]); });
+
+    var producedRows = [["드럼 종류", "재생 수량", "등록 유형", "비고"]];
+    STATE.transactions.forEach(function(t){
+      if (t.type !== "produced" || t.date !== date) return;
+      producedRows.push([
+        drumName(t.drumTypeId), t.qty,
+        t.adminType === "production" ? "생산관리자" : "전체관리자",
+        t.note || ""
+      ]);
+    });
 
     var wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(partyRows), "업체별 요약");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detailRows), "상세");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), "종류별 요약");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(producedRows), "재생 상세");
     XLSX.writeFile(wb, "공드럼_입출고_" + date + ".xlsx");
   }
 
@@ -1262,26 +1291,9 @@
       if (recentProduced.length === 0){
         html += '<div class="empty">아직 재생 생산 기록이 없어요.</div>';
       } else {
-        recentProduced.forEach(function(t){ html += renderProducedRow(t); });
+        recentProduced.forEach(function(t){ html += renderTxRow(t, true); });
       }
     }
-    return html;
-  }
-
-  function renderProducedRow(t){
-    var pendingCls = pendingDeleteTx === t.id ? " pending" : "";
-    var html = '<div class="tx-row">';
-    html += '<span class="pill in">재생 생산</span>';
-    html += '<div class="tx-main">';
-    html += '<div class="tx-top"><span class="tx-drum">' + esc(drumName(t.drumTypeId)) + '</span>';
-    html += '<span class="tx-qty in num">+' + fmtNum(t.qty) + '개</span></div>';
-    html += '<div class="tx-meta">' + fmtDate(t.date) + (t.adminType ? (' · ' + (t.adminType === "production" ? "생산관리자" : "전체관리자") + ' 등록') : '') + '</div>';
-    if (t.note) html += '<div class="tx-note">' + esc(t.note) + '</div>';
-    html += '</div>';
-    if (!isReadOnly){
-      html += '<button type="button" class="tx-del' + pendingCls + '" data-action="deleteTx" data-id="' + t.id + '">' + (pendingDeleteTx === t.id ? "정말?" : "삭제") + '</button>';
-    }
-    html += '</div>';
     return html;
   }
 
@@ -1694,6 +1706,7 @@
     loginError = "";
     formView = { "in": "form", "out": "form" };
     lastResult = { "in": null, "out": null };
+    historyFilterType = "all";
     render();
   }
 
