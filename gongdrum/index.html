@@ -1293,7 +1293,7 @@
     ensureOutChecks(d);
     var err = formErrors["out"] || { checks: {}, otherCheck: {}, scrapSold: {}, scrapDisposed: {} };
     var stock = computeStock(STATE);
-    var partyLabel = "용도 / 출고처";
+    var partyLabel = "출고처";
     var partyPh = "예: 세척 후 재사용";
     var isAdmin = session && session.role === "admin";
 
@@ -1793,11 +1793,11 @@
 
     if (!anyOutChecked && !anyScrapChecked) errors.noneChecked = "출고하거나 매각·폐기할 드럼 종류를 하나 이상 선택해주세요";
 
-    // 용도/출고처·담당자는 실제 출고 항목이 있을 때만 필요해요. 매각·폐기만
+    // 출고처·담당자는 실제 출고 항목이 있을 때만 필요해요. 매각·폐기만
     // 등록할 때는 (예전 고철 탭처럼) 필요 없어요.
     if (anyOutChecked){
-      if (!d.partyId) errors.partyId = "용도나 출고처를 선택해주세요";
-      else if (d.partyId === OTHER_PARTY_ID && (!d.party || !d.party.trim())) errors.party = "용도나 출고처를 입력해주세요";
+      if (!d.partyId) errors.partyId = "출고처를 선택해주세요";
+      else if (d.partyId === OTHER_PARTY_ID && (!d.party || !d.party.trim())) errors.party = "출고처를 입력해주세요";
       var isDriver = session && session.role === "driver";
       if (!isDriver && (!d.handler || !d.handler.trim())) errors.handler = "담당자를 입력해주세요";
     }
