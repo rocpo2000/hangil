@@ -422,7 +422,7 @@
   var lastResult = { "in": null, "out": null };
   var formErrors = {
     "in": { checks: {}, otherCheck: {} }, "out": { checks: {}, otherCheck: {}, scrapSold: {}, scrapDisposed: {} },
-    addType: "", addParty: { "in": "", "out": "" }, addDriver: "", adminPw: ""
+    addType: "", addParty: { "in": "", "out": "" }, addDriver: "", adminPw: { production: "", general: "" }
   };
   var formDrafts = {
     "in": {
@@ -438,9 +438,9 @@
     },
     addType: "",
     addParty: { "in": "", "out": "" },
-    login: { driverId: "", pin: "", adminPw: "" },
+    login: { driverId: "", pin: "", adminPw: "", adminType: "general" },
     addDriver: { name: "", pin: "" },
-    adminPw: { value: "" }
+    adminPw: { production: "", general: "" }
   };
   var editingTypeId = null;
   var editingTypeValue = "";
@@ -712,7 +712,8 @@
       drivers: [],
       inParties: [],
       outParties: [],
-      adminPassword: "admin1234"
+      adminPasswordProd: "admin1234",
+      adminPasswordGeneral: "admin1234"
     };
   }
   function normalizeState(s){
@@ -726,7 +727,11 @@
       if (!Array.isArray(s.outParties)) s.outParties = legacy.slice();
     }
     delete s.parties;
-    if (typeof s.adminPassword !== "string" || !s.adminPassword) s.adminPassword = "admin1234";
+    // 생산관리자/전체관리자 비밀번호로 분리하기 전의 기존 상태는 두 유형이
+    // 같은 비밀번호로 시작하도록 옮겨준다 (이후에는 설정에서 각자 바꿀 수 있음).
+    if (typeof s.adminPasswordProd !== "string" || !s.adminPasswordProd) s.adminPasswordProd = s.adminPassword || "admin1234";
+    if (typeof s.adminPasswordGeneral !== "string" || !s.adminPasswordGeneral) s.adminPasswordGeneral = s.adminPassword || "admin1234";
+    delete s.adminPassword;
     return s;
   }
   function loadStateFromDOM(){
@@ -755,7 +760,7 @@
     var isAdmin = session.role === "admin";
     var syncState = isReadOnly ? "readonly" : (hasSync ? "live" : "local");
     var syncLabel = isReadOnly ? "읽기 전용" : (hasSync ? "실시간 동기화" : "이 브라우저에만 저장");
-    var whoLabel = isAdmin ? "관리자" : session.name;
+    var whoLabel = isAdmin ? (session.adminType === "production" ? "생산관리자" : "전체관리자") : session.name;
 
     var content = "";
     if (activeTab === "settings" && isAdmin) content = renderSettings();
@@ -827,8 +832,13 @@
         html += '</form>';
       }
     } else {
+      var adminType = formDrafts.login.adminType === "production" ? "production" : "general";
       html += '<form class="login-form" data-form="login" data-action-submit="loginAdmin">';
-      html += '<div class="field"><label for="f-adminPw">관리자 비밀번호</label>';
+      html += '<div class="field"><label>관리자 유형</label><div class="seg">';
+      html += '<button type="button" class="' + (adminType==="general"?"active":"") + '" data-action="setAdminLoginType" data-value="general">전체관리자</button>';
+      html += '<button type="button" class="' + (adminType==="production"?"active":"") + '" data-action="setAdminLoginType" data-value="production">생산관리자</button>';
+      html += '</div></div>';
+      html += '<div class="field"><label for="f-adminPw">' + (adminType==="production"?"생산관리자":"전체관리자") + ' 비밀번호</label>';
       html += '<input class="input" id="f-adminPw" type="password" placeholder="비밀번호" data-field="adminPw" value="' + esc(formDrafts.login.adminPw) + '"></div>';
       html += '<button type="submit" class="btn primary">로그인</button>';
       html += '</form>';
@@ -906,6 +916,9 @@
     html += '<div class="tx-meta">' + fmtDate(t.date) + ' · ' + esc(t.party || "-") + ' · ' + esc(t.handler || "-") + '</div>';
     if (isIn && t.goodQty != null && t.goodQty !== t.qty){
       html += '<div class="tx-meta">재생 <b class="num">' + fmtNum(t.goodQty) + '개</b> · 고철 <b class="num">' + fmtNum(t.qty - t.goodQty) + '개</b></div>';
+    }
+    if (isIn && t.adminType){
+      html += '<div class="tx-meta">' + (t.adminType === "production" ? "생산관리자" : "전체관리자") + ' 등록</div>';
     }
     if (t.note) html += '<div class="tx-note">' + esc(t.note) + '</div>';
     html += '</div>';
@@ -1389,6 +1402,9 @@
     var html = "";
     html += '<div class="section-title">' + (isIn?"입고 등록 완료":"출고 등록 완료") + '</div>';
     html += '<div class="result-meta">' + fmtDate(r.date) + ' · ' + esc(r.partyName || "-") + ' · ' + esc(r.handlerName || "-") + '</div>';
+    if (isIn && r.adminType){
+      html += '<div class="result-meta">' + (r.adminType === "production" ? "생산관리자" : "전체관리자") + ' 등록</div>';
+    }
     if (r.note) html += '<div class="tx-note" style="margin-bottom:10px">' + esc(r.note) + '</div>';
     r.items.forEach(function(it){
       var txType = it.txType || (isIn ? "in" : "out");
@@ -1516,10 +1532,15 @@
 
     html += '<div class="section-title">관리자 비밀번호</div>';
     html += '<div class="add-type-row" data-form="adminPw">';
-    html += '<input class="input" type="password" placeholder="새 비밀번호 (4자 이상)" data-field="value" value="' + esc(formDrafts.adminPw.value) + '">';
-    html += '<button type="button" class="btn ghost small" data-action="changeAdminPw">변경</button>';
+    html += '<input class="input" type="password" placeholder="전체관리자 새 비밀번호 (4자 이상)" data-field="general" value="' + esc(formDrafts.adminPw.general) + '">';
+    html += '<button type="button" class="btn ghost small" data-action="changeAdminPw" data-type="general">변경</button>';
     html += '</div>';
-    if (formErrors.adminPw) html += '<div class="err" style="margin-top:6px">' + esc(formErrors.adminPw) + '</div>';
+    if (formErrors.adminPw.general) html += '<div class="err" style="margin-top:6px">' + esc(formErrors.adminPw.general) + '</div>';
+    html += '<div class="add-type-row" data-form="adminPw" style="margin-top:8px">';
+    html += '<input class="input" type="password" placeholder="생산관리자 새 비밀번호 (4자 이상)" data-field="production" value="' + esc(formDrafts.adminPw.production) + '">';
+    html += '<button type="button" class="btn ghost small" data-action="changeAdminPw" data-type="production">변경</button>';
+    html += '</div>';
+    if (formErrors.adminPw.production) html += '<div class="err" style="margin-top:6px">' + esc(formErrors.adminPw.production) + '</div>';
 
     if (isReadOnly) html += '<div class="hint" style="margin-top:14px">읽기 전용 보기에서는 변경할 수 없어요.</div>';
     return html;
@@ -1550,6 +1571,12 @@
     render();
   }
 
+  function setAdminLoginType(v){
+    formDrafts.login.adminType = (v === "production") ? "production" : "general";
+    loginError = "";
+    render();
+  }
+
   function loginDriverSubmit(){
     var d = formDrafts.login;
     var driver = STATE.drivers.filter(function(x){ return x.id === d.driverId; })[0];
@@ -1561,22 +1588,24 @@
     loginError = "";
     session = { role:"driver", driverId: driver.id, name: driver.name };
     ls_set(SESSION_KEY, JSON.stringify(session));
-    formDrafts.login = { driverId:"", pin:"", adminPw:"" };
+    formDrafts.login = { driverId:"", pin:"", adminPw:"", adminType:"general" };
     activeTab = "in";
     render();
   }
 
   function loginAdminSubmit(){
     var d = formDrafts.login;
-    if (!d.adminPw || d.adminPw !== STATE.adminPassword){
+    var adminType = d.adminType === "production" ? "production" : "general";
+    var expected = adminType === "production" ? STATE.adminPasswordProd : STATE.adminPasswordGeneral;
+    if (!d.adminPw || d.adminPw !== expected){
       loginError = "비밀번호가 맞지 않아요";
       render();
       return;
     }
     loginError = "";
-    session = { role:"admin" };
+    session = { role:"admin", adminType: adminType };
     ls_set(SESSION_KEY, JSON.stringify(session));
-    formDrafts.login = { driverId:"", pin:"", adminPw:"" };
+    formDrafts.login = { driverId:"", pin:"", adminPw:"", adminType:"general" };
     activeTab = "dashboard";
     render();
   }
@@ -1903,6 +1932,7 @@
         id: genId(), type: "in", date: d.date, drumTypeId: dt.id,
         qty: qty, goodQty: goodQty, party: partyName, partyId: partyId, handler: handlerName,
         driverId: isDriver ? session.driverId : null,
+        adminType: isAdmin ? session.adminType : null,
         note: (d.note || "").trim(), ts: ts0 + (seq++)
       });
     });
@@ -1919,6 +1949,7 @@
         id: genId(), type: "in", date: d.date, drumTypeId: resolved.id,
         qty: oQty, goodQty: oGood, party: partyName, partyId: partyId, handler: handlerName,
         driverId: isDriver ? session.driverId : null,
+        adminType: isAdmin ? session.adminType : null,
         note: (d.note || "").trim(), ts: ts0 + (seq++)
       });
     }
@@ -1932,6 +1963,7 @@
       if (res.ok){
         lastResult["in"] = {
           date: d.date, partyName: partyName, handlerName: handlerName,
+          adminType: isAdmin ? session.adminType : null,
           note: (d.note || "").trim(), items: resultItems
         };
         formView["in"] = "result";
@@ -2097,14 +2129,18 @@
     publishState(newState, { flash: "기사님을 삭제했어요", keepTab: "settings" }).then(function(){ render(); });
   }
 
-  function changeAdminPassword(){
+  function changeAdminPassword(type){
     if (isReadOnly) return;
-    var pw = (formDrafts.adminPw.value || "").trim();
-    if (pw.length < 4){ formErrors.adminPw = "4자 이상 입력해주세요"; render(); return; }
-    formErrors.adminPw = "";
-    var newState = Object.assign({}, STATE, { adminPassword: pw });
-    formDrafts.adminPw = { value:"" };
-    publishState(newState, { flash: "관리자 비밀번호를 변경했어요", keepTab: "settings" }).then(function(){ render(); });
+    var t = type === "production" ? "production" : "general";
+    var pw = (formDrafts.adminPw[t] || "").trim();
+    if (pw.length < 4){ formErrors.adminPw[t] = "4자 이상 입력해주세요"; render(); return; }
+    formErrors.adminPw[t] = "";
+    var patch = {};
+    patch[t === "production" ? "adminPasswordProd" : "adminPasswordGeneral"] = pw;
+    var newState = Object.assign({}, STATE, patch);
+    formDrafts.adminPw[t] = "";
+    var label = t === "production" ? "생산관리자" : "전체관리자";
+    publishState(newState, { flash: label + " 비밀번호를 변경했어요", keepTab: "settings" }).then(function(){ render(); });
   }
 
   /* ---------- event delegation ---------- */
@@ -2126,13 +2162,14 @@
     else if (action === "savePartyEdit"){ savePartyEdit(t.dataset.kind, t.dataset.id); }
     else if (action === "deleteParty"){ if (!t.disabled) deleteParty(t.dataset.kind, t.dataset.id); }
     else if (action === "setLoginMode"){ setLoginMode(t.dataset.value); }
+    else if (action === "setAdminLoginType"){ setAdminLoginType(t.dataset.value); }
     else if (action === "logout"){ logout(); }
     else if (action === "addDriver"){ addDriver(); }
     else if (action === "startDriverEdit"){ startDriverEdit(t.dataset.id); }
     else if (action === "cancelDriverEdit"){ cancelDriverEdit(); }
     else if (action === "saveDriverEdit"){ saveDriverEdit(t.dataset.id); }
     else if (action === "deleteDriver"){ deleteDriver(t.dataset.id); }
-    else if (action === "changeAdminPw"){ changeAdminPassword(); }
+    else if (action === "changeAdminPw"){ changeAdminPassword(t.dataset.type); }
     else if (action === "startNewEntry"){ startNewEntry(t.dataset.kind); }
     else if (action === "downloadExcel"){ downloadExcel(); }
   }
@@ -2246,7 +2283,7 @@
     try {
       var s = JSON.parse(raw);
       if (s && s.role === "admin"){
-        session = s;
+        session = { role: "admin", adminType: (s.adminType === "production" ? "production" : "general") };
       } else if (s && s.role === "driver" && s.driverId && STATE.drivers.some(function(d){ return d.id === s.driverId; })){
         session = s;
       } else {
