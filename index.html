@@ -419,13 +419,13 @@
   var formView = { "in": "form", "out": "form" }; // "form" | "result"
   var lastResult = { "in": null, "out": null };
   var formErrors = {
-    "in": { checks: {}, otherCheck: {} }, "out": { checks: {}, otherCheck: {}, scrapSold: {}, scrapDisposed: {} },
+    "in": { checks: {}, otherCheck: {}, produced: {} }, "out": { checks: {}, otherCheck: {}, scrapSold: {}, scrapDisposed: {} },
     addType: "", addParty: { "in": "", "out": "" }, addDriver: "", addAdmin: ""
   };
   var formDrafts = {
     "in": {
-      date: "", checks: {},
-      otherChecked: false, otherName: "", otherQty: "", otherGoodQty: "",
+      date: "", checks: {}, produced: {},
+      otherChecked: false, otherName: "", otherQty: "",
       partyId: "", party: "", handler: "", note: ""
     },
     "out": {
@@ -504,13 +504,21 @@
     var stock = {};
     state.drumTypes.forEach(function(dt){ stock[dt.id] = 0; });
     state.transactions.forEach(function(t){
-      if (t.type !== "in" && t.type !== "out") return; // "sold"/"disposed" affect scrap stock, not this
       if (!(t.drumTypeId in stock)) stock[t.drumTypeId] = 0;
-      // only the 재생(reclaimable) portion of an inbound entry counts as
-      // stock; older entries without a goodQty split count in full, same
-      // as before this feature existed.
-      var inQty = t.goodQty != null ? t.goodQty : t.qty;
-      stock[t.drumTypeId] += (t.type === "in" ? inQty : -t.qty);
+      if (t.type === "produced"){
+        // 하루 재생 드럼 수량: 별도 체크리스트로 등록되는, 실제로 재고를
+        // 늘리는 처리 실적. 어떤 입고 건과도 1:1로 묶여있지 않다.
+        stock[t.drumTypeId] += t.qty;
+      } else if (t.type === "in" || t.type === "out"){
+        // 재생/생산이 입고와 분리되기 전의 기존 입고 기록은 goodQty에
+        // 재생 수량이 그대로 남아있으므로 예전과 같이 계산한다 (없으면
+        // 그 시절 기사님 입고처럼 전량 재고로 들어간 것으로 본다).
+        // 이 기능 이후 새로 생기는 입고 기록은 goodQty를 항상 명시적으로
+        // 채워두므로(기사님 전량 0, 관리자는 늘 0) 아래 fallback을 다시
+        // 타지 않는다.
+        var inQty = t.goodQty != null ? t.goodQty : t.qty;
+        stock[t.drumTypeId] += (t.type === "in" ? inQty : -t.qty);
+      }
     });
     return stock;
   }
@@ -519,7 +527,7 @@
     state.transactions.forEach(function(t){
       if (t.drumTypeId !== drumTypeId) return;
       if (t.type === "in") generated += (t.qty - (t.goodQty != null ? t.goodQty : t.qty));
-      else if (t.type === "sold" || t.type === "disposed") used += t.qty;
+      else if (t.type === "produced" || t.type === "sold" || t.type === "disposed") used += t.qty;
     });
     return generated - used;
   }
@@ -529,6 +537,7 @@
       state.transactions.forEach(function(t){
         if (t.drumTypeId !== dt.id) return;
         if (t.type === "in"){ totalIn += t.qty; totalGood += (t.goodQty != null ? t.goodQty : t.qty); }
+        else if (t.type === "produced") totalGood += t.qty;
         else if (t.type === "out") totalOut += t.qty;
         else if (t.type === "sold") totalSold += t.qty;
         else if (t.type === "disposed") totalDisposed += t.qty;
@@ -542,10 +551,13 @@
     });
   }
   // makes sure the 입고 checklist draft has an entry for every current drum
-  // type, without touching values already entered for existing ones.
+  // type, without touching values already entered for existing ones. also
+  // backfills the admin-only "하루 재생 드럼 수량" checklist, entered fully
+  // independently of which types were checked for 입고 that day.
   function ensureInChecks(d){
     STATE.drumTypes.forEach(function(dt){
-      if (!d.checks[dt.id]) d.checks[dt.id] = { checked: false, qty: "", goodQty: "" };
+      if (!d.checks[dt.id]) d.checks[dt.id] = { checked: false, qty: "" };
+      if (!d.produced[dt.id]) d.produced[dt.id] = { checked: false, qty: "" };
     });
   }
   // same as ensureInChecks but for the 출고 checklist draft (no goodQty split
@@ -598,7 +610,10 @@
       if (!formDrafts["in"].checks || typeof formDrafts["in"].checks !== "object" || Array.isArray(formDrafts["in"].checks)){
         formDrafts["in"].checks = {};
       }
-      formErrors["in"] = { checks: {}, otherCheck: {} };
+      if (!formDrafts["in"].produced || typeof formDrafts["in"].produced !== "object" || Array.isArray(formDrafts["in"].produced)){
+        formDrafts["in"].produced = {};
+      }
+      formErrors["in"] = { checks: {}, otherCheck: {}, produced: {} };
       if (!formDrafts["out"].checks || typeof formDrafts["out"].checks !== "object" || Array.isArray(formDrafts["out"].checks)){
         formDrafts["out"].checks = {};
       }
@@ -916,7 +931,7 @@
     html += '<div class="tx-top"><span class="tx-drum">' + esc(drumName(t.drumTypeId)) + '</span>';
     html += '<span class="tx-qty ' + (isIn?"in":"out") + ' num">' + (isIn?"+":"-") + fmtNum(t.qty) + '개</span></div>';
     html += '<div class="tx-meta">' + fmtDate(t.date) + ' · ' + esc(t.party || "-") + ' · ' + esc(t.handler || "-") + '</div>';
-    if (isIn && t.goodQty != null && t.goodQty !== t.qty){
+    if (isIn && !t.decoupled && t.goodQty != null && t.goodQty !== t.qty){
       html += '<div class="tx-meta">재생 <b class="num">' + fmtNum(t.goodQty) + '개</b> · 고철 <b class="num">' + fmtNum(t.qty - t.goodQty) + '개</b></div>';
     }
     if (isIn && t.adminType){
@@ -1034,7 +1049,7 @@
         html += '<div class="report-table-wrap"><table class="report-table"><thead><tr><th>구분</th><th>드럼 종류</th><th>수량</th><th>재생/고철</th><th>담당자</th></tr></thead><tbody>';
         g.items.forEach(function(t){
           var isIn = t.type === "in";
-          var hasSplit = isIn && t.goodQty != null && t.goodQty !== t.qty;
+          var hasSplit = isIn && !t.decoupled && t.goodQty != null && t.goodQty !== t.qty;
           html += '<tr><td>' + (isIn ? "입고" : "출고") + '</td><td>' + esc(drumName(t.drumTypeId)) + '</td>';
           html += '<td class="num ' + (isIn?"in":"out") + '">' + (isIn?"+":"-") + fmtNum(t.qty) + '</td>';
           html += '<td class="num">' + (hasSplit ? (fmtNum(t.goodQty) + ' / ' + fmtNum(t.qty - t.goodQty)) : "-") + '</td>';
@@ -1076,7 +1091,7 @@
     partyGroups.forEach(function(g){
       g.items.forEach(function(t){
         var isIn = t.type === "in";
-        var hasSplit = isIn && t.goodQty != null && t.goodQty !== t.qty;
+        var hasSplit = isIn && !t.decoupled && t.goodQty != null && t.goodQty !== t.qty;
         detailRows.push([
           g.name, isIn ? "입고" : "출고",
           drumName(t.drumTypeId), t.qty,
@@ -1126,10 +1141,19 @@
   function renderInForm(){
     var d = formDrafts["in"];
     ensureInChecks(d);
-    var err = formErrors["in"] || { checks: {}, otherCheck: {} };
+    var err = formErrors["in"] || { checks: {}, otherCheck: {}, produced: {} };
     var isAdmin = session && session.role === "admin";
 
-    var html = '<form data-form="in" data-action-submit="in">';
+    var html = "";
+    if (isAdmin && STATE.drumTypes.length > 0){
+      var totalBacklogAll = 0;
+      STATE.drumTypes.forEach(function(dt){ totalBacklogAll += computeScrapStock(STATE, dt.id); });
+      html += '<div class="summary-card">';
+      html += '<div><div class="label">재생·매각·폐기 대기 물량</div><div class="value num">' + fmtNum(totalBacklogAll) + '<small>개</small></div></div>';
+      html += '<div class="meta">' + STATE.drumTypes.length + '종</div>';
+      html += '</div>';
+    }
+    html += '<form data-form="in" data-action-submit="in">';
     html += '<div class="section-title">공드럼 입고 등록</div>';
 
     if (STATE.drumTypes.length === 0 && !d.otherChecked){
@@ -1139,10 +1163,10 @@
 
     html += field("date","날짜","date", d.date || todayStr(), err.date);
 
-    html += '<div class="field"><label>드럼 종류별 수량' + (isAdmin ? ' · 하루 재생 드럼 수량' : '') + '</label></div>';
+    html += '<div class="field"><label>드럼 종류별 입고수량</label></div>';
 
     STATE.drumTypes.forEach(function(dt){
-      var c = d.checks[dt.id] || { checked: false, qty: "", goodQty: "" };
+      var c = d.checks[dt.id] || { checked: false, qty: "" };
       var cErr = (err.checks && err.checks[dt.id]) || {};
       html += '<div class="check-row' + (c.checked?" checked":"") + '">';
       html += '<label class="check-row-head"><input type="checkbox" data-field="checkToggle" data-id="' + dt.id + '"' + (c.checked?" checked":"") + '><span>' + esc(dt.name) + '</span></label>';
@@ -1153,19 +1177,6 @@
         html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="1" step="1" placeholder="0" data-field="checkQty" data-id="' + dt.id + '" value="' + esc(c.qty) + '"><span class="unit">개</span></div>';
         if (cErr.qty) html += '<div class="err">' + esc(cErr.qty) + '</div>';
         html += '</div>';
-        if (isAdmin){
-          var qtyNum = parseInt(c.qty, 10);
-          var goodNum = (c.goodQty === "" || c.goodQty == null) ? null : parseInt(c.goodQty, 10);
-          html += '<div class="field' + (cErr.goodQty?" has-err":"") + '">';
-          html += '<label>하루 재생 드럼 수량 (선택)</label>';
-          html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="0" step="1" placeholder="0" data-field="checkGoodQty" data-id="' + dt.id + '" value="' + esc(c.goodQty) + '"><span class="unit">개</span></div>';
-          if (cErr.goodQty){
-            html += '<div class="err">' + esc(cErr.goodQty) + '</div>';
-          } else if (!isNaN(qtyNum) && qtyNum > 0){
-            html += '<div class="stock-hint">고철드럼 <b class="num">' + fmtNum(qtyNum - (goodNum != null ? goodNum : 0)) + '개</b>로 계산돼요 (입고수량 − 하루 재생 드럼 수량)</div>';
-          }
-          html += '</div>';
-        }
         html += '</div>';
       }
       html += '</div>';
@@ -1186,22 +1197,33 @@
       html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="1" step="1" placeholder="0" data-field="otherQty" value="' + esc(d.otherQty) + '"><span class="unit">개</span></div>';
       if (otherErr.qty) html += '<div class="err">' + esc(otherErr.qty) + '</div>';
       html += '</div>';
-      if (isAdmin){
-        var oQtyNum = parseInt(d.otherQty, 10);
-        var oGoodNum = (d.otherGoodQty === "" || d.otherGoodQty == null) ? null : parseInt(d.otherGoodQty, 10);
-        html += '<div class="field' + (otherErr.goodQty?" has-err":"") + '">';
-        html += '<label>하루 재생 드럼 수량 (선택)</label>';
-        html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="0" step="1" placeholder="0" data-field="otherGoodQty" value="' + esc(d.otherGoodQty) + '"><span class="unit">개</span></div>';
-        if (otherErr.goodQty){
-          html += '<div class="err">' + esc(otherErr.goodQty) + '</div>';
-        } else if (!isNaN(oQtyNum) && oQtyNum > 0){
-          html += '<div class="stock-hint">고철드럼 <b class="num">' + fmtNum(oQtyNum - (oGoodNum != null ? oGoodNum : 0)) + '개</b>로 계산돼요 (입고수량 − 하루 재생 드럼 수량)</div>';
-        }
-        html += '</div>';
-      }
       html += '</div>';
     }
     html += '</div>';
+
+    if (isAdmin){
+      html += '<div class="field"><label>하루 재생 드럼 수량 (선택, 입고수량과 별도)</label></div>';
+      STATE.drumTypes.forEach(function(dt){
+        var backlog = computeScrapStock(STATE, dt.id);
+        var p = d.produced[dt.id] || { checked: false, qty: "" };
+        var pErr = (err.produced && err.produced[dt.id]) || {};
+        html += '<div class="check-row' + (p.checked?" checked":"") + '">';
+        html += '<label class="check-row-head"><input type="checkbox" data-field="producedToggle" data-id="' + dt.id + '"' + (p.checked?" checked":"") + '><span>' + esc(dt.name) + '</span></label>';
+        if (p.checked){
+          html += '<div class="check-row-fields">';
+          html += '<div class="field">';
+          html += '<div class="stock-hint">재생·매각·폐기 대기 물량 <b class="num">' + fmtNum(backlog) + '개</b></div>';
+          html += '</div>';
+          html += '<div class="field' + (pErr.qty?" has-err":"") + '">';
+          html += '<label>재생 수량</label>';
+          html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="1" step="1" placeholder="0" data-field="producedQty" data-id="' + dt.id + '" value="' + esc(p.qty) + '"><span class="unit">개</span></div>';
+          if (pErr.qty) html += '<div class="err">' + esc(pErr.qty) + '</div>';
+          html += '</div>';
+          html += '</div>';
+        }
+        html += '</div>';
+      });
+    }
 
     if (err.noneChecked) html += '<div class="err" style="margin:-6px 0 14px">' + esc(err.noneChecked) + '</div>';
 
@@ -1232,6 +1254,34 @@
     html += '<button type="submit" class="btn in-btn"' + (submitting["in"] || isReadOnly ? " disabled" : "") + '>' + (submitting["in"] ? "저장 중..." : "입고 등록") + '</button>';
     if (isReadOnly) html += '<div class="hint" style="text-align:center">읽기 전용 보기에서는 등록할 수 없어요.</div>';
     html += '</form>';
+
+    if (isAdmin){
+      html += '<div class="section-title">최근 재생 생산 기록</div>';
+      var recentProduced = STATE.transactions.filter(function(t){ return t.type === "produced"; })
+        .sort(function(a,b){ return b.ts - a.ts; });
+      if (recentProduced.length === 0){
+        html += '<div class="empty">아직 재생 생산 기록이 없어요.</div>';
+      } else {
+        recentProduced.forEach(function(t){ html += renderProducedRow(t); });
+      }
+    }
+    return html;
+  }
+
+  function renderProducedRow(t){
+    var pendingCls = pendingDeleteTx === t.id ? " pending" : "";
+    var html = '<div class="tx-row">';
+    html += '<span class="pill in">재생 생산</span>';
+    html += '<div class="tx-main">';
+    html += '<div class="tx-top"><span class="tx-drum">' + esc(drumName(t.drumTypeId)) + '</span>';
+    html += '<span class="tx-qty in num">+' + fmtNum(t.qty) + '개</span></div>';
+    html += '<div class="tx-meta">' + fmtDate(t.date) + (t.adminType ? (' · ' + (t.adminType === "production" ? "생산관리자" : "전체관리자") + ' 등록') : '') + '</div>';
+    if (t.note) html += '<div class="tx-note">' + esc(t.note) + '</div>';
+    html += '</div>';
+    if (!isReadOnly){
+      html += '<button type="button" class="tx-del' + pendingCls + '" data-action="deleteTx" data-id="' + t.id + '">' + (pendingDeleteTx === t.id ? "정말?" : "삭제") + '</button>';
+    }
+    html += '</div>';
     return html;
   }
 
@@ -1395,7 +1445,7 @@
   }
 
   /* ---------- render: registration result ---------- */
-  var RESULT_PILL = { in: "입고", out: "출고", sold: "매각", disposed: "폐기" };
+  var RESULT_PILL = { in: "입고", out: "출고", sold: "매각", disposed: "폐기", produced: "재생 생산" };
 
   function renderResult(kind){
     var r = lastResult[kind];
@@ -1410,14 +1460,11 @@
     if (r.note) html += '<div class="tx-note" style="margin-bottom:10px">' + esc(r.note) + '</div>';
     r.items.forEach(function(it){
       var txType = it.txType || (isIn ? "in" : "out");
-      var isPlus = txType === "in";
+      var isPlus = txType === "in" || txType === "produced";
       html += '<div class="tx-row">';
       html += '<span class="pill ' + (isPlus?"in":"out") + '">' + RESULT_PILL[txType] + '</span>';
       html += '<div class="tx-main"><div class="tx-top"><span class="tx-drum">' + esc(it.name) + '</span>';
       html += '<span class="tx-qty ' + (isPlus?"in":"out") + ' num">' + (isPlus?"+":"-") + fmtNum(it.qty) + '개</span></div>';
-      if (txType === "in" && it.goodQty != null && it.goodQty !== it.qty){
-        html += '<div class="tx-meta">재생 <b class="num">' + fmtNum(it.goodQty) + '개</b> · 고철 <b class="num">' + fmtNum(it.qty - it.goodQty) + '개</b></div>';
-      }
       html += '</div>';
       html += '</div>';
     });
@@ -1871,51 +1918,66 @@
     if (errors.date || errors.partyId || errors.party || errors.handler || errors.noneChecked) return true;
     if (errors.checks && Object.keys(errors.checks).some(function(id){ return errors.checks[id] && Object.keys(errors.checks[id]).length > 0; })) return true;
     if (errors.otherCheck && Object.keys(errors.otherCheck).length > 0) return true;
+    if (errors.produced && Object.keys(errors.produced).some(function(id){ return errors.produced[id] && Object.keys(errors.produced[id]).length > 0; })) return true;
     return false;
   }
 
   function validateInEntry(d){
-    var errors = { checks: {}, otherCheck: {} };
+    var errors = { checks: {}, otherCheck: {}, produced: {} };
     if (!d.date) errors.date = "날짜를 선택해주세요";
 
     var isAdmin = session && session.role === "admin";
-    var anyChecked = false;
+    var anyIn = false;
+    var anyProduced = false;
 
     STATE.drumTypes.forEach(function(dt){
       var c = d.checks[dt.id];
       if (!c || !c.checked) return;
-      anyChecked = true;
+      anyIn = true;
       var cErr = {};
       var qty = parseInt(c.qty, 10);
       if (!qty || qty <= 0) cErr.qty = "수량을 입력해주세요";
-      if (isAdmin && c.goodQty !== "" && c.goodQty != null){
-        var goodQty = parseInt(c.goodQty, 10);
-        if (isNaN(goodQty) || goodQty < 0) cErr.goodQty = "0 이상의 숫자를 입력해주세요";
-        else if (!cErr.qty && goodQty > qty) cErr.goodQty = "입고수량보다 클 수 없어요";
-      }
       if (Object.keys(cErr).length) errors.checks[dt.id] = cErr;
     });
 
     if (d.otherChecked){
-      anyChecked = true;
+      anyIn = true;
       var oErr = {};
       if (!d.otherName || !d.otherName.trim()) oErr.name = "드럼 종류를 입력해주세요";
       var oQty = parseInt(d.otherQty, 10);
       if (!oQty || oQty <= 0) oErr.qty = "수량을 입력해주세요";
-      if (isAdmin && d.otherGoodQty !== "" && d.otherGoodQty != null){
-        var oGood = parseInt(d.otherGoodQty, 10);
-        if (isNaN(oGood) || oGood < 0) oErr.goodQty = "0 이상의 숫자를 입력해주세요";
-        else if (!oErr.qty && oGood > oQty) oErr.goodQty = "입고수량보다 클 수 없어요";
-      }
       if (Object.keys(oErr).length) errors.otherCheck = oErr;
     }
 
-    if (!anyChecked) errors.noneChecked = "드럼 종류를 하나 이상 선택해주세요";
+    // 하루 재생 드럼 수량은 입고수량과 완전히 별도의 체크리스트라, 그날
+    // 입고를 체크하지 않은 종류도 재생 처리량만 독립적으로 등록할 수 있다.
+    // 다만 재생·매각·폐기 대기 물량(계산상 같은 풀)을 넘어설 수는 없다.
+    if (isAdmin){
+      STATE.drumTypes.forEach(function(dt){
+        var p = d.produced[dt.id];
+        if (!p || !p.checked) return;
+        anyProduced = true;
+        var pErr = {};
+        var pQty = parseInt(p.qty, 10);
+        if (!pQty || pQty <= 0) pErr.qty = "수량을 입력해주세요";
+        else {
+          var backlog = computeScrapStock(STATE, dt.id);
+          if (pQty > backlog) pErr.qty = "재생·매각·폐기 대기 물량보다 많아요 (현재 " + fmtNum(backlog) + "개)";
+        }
+        if (Object.keys(pErr).length) errors.produced[dt.id] = pErr;
+      });
+    }
 
-    if (!d.partyId) errors.partyId = "공급처를 선택해주세요";
-    else if (d.partyId === OTHER_PARTY_ID && (!d.party || !d.party.trim())) errors.party = "공급처를 입력해주세요";
-    var isDriver = session && session.role === "driver";
-    if (!isDriver && (!d.handler || !d.handler.trim())) errors.handler = "담당자를 입력해주세요";
+    if (!anyIn && !anyProduced) errors.noneChecked = "입고하거나 재생 처리할 드럼 종류를 하나 이상 선택해주세요";
+
+    // 공급처·담당자는 실제 입고 항목이 있을 때만 필요하다. 재생 수량만
+    // 등록할 때는 (매각·폐기와 마찬가지로) 필요 없다.
+    if (anyIn){
+      if (!d.partyId) errors.partyId = "공급처를 선택해주세요";
+      else if (d.partyId === OTHER_PARTY_ID && (!d.party || !d.party.trim())) errors.party = "공급처를 입력해주세요";
+      var isDriver = session && session.role === "driver";
+      if (!isDriver && (!d.handler || !d.handler.trim())) errors.handler = "담당자를 입력해주세요";
+    }
     return errors;
   }
 
@@ -1930,14 +1992,19 @@
 
     var isDriver = session.role === "driver";
     var isAdmin = session.role === "admin";
-    var handlerName = isDriver ? session.name : d.handler.trim();
+    var anyIn = d.otherChecked || STATE.drumTypes.some(function(dt){
+      var c = d.checks[dt.id];
+      return c && c.checked;
+    });
+
+    var handlerName = isDriver ? session.name : (d.handler || "").trim();
     var partyId, partyName;
     if (d.partyId === OTHER_PARTY_ID){
       partyId = null;
-      partyName = d.party.trim();
+      partyName = (d.party || "").trim();
     } else {
       var pMatch = STATE.inParties.filter(function(p){ return p.id === d.partyId; })[0];
-      partyId = d.partyId;
+      partyId = d.partyId || null;
       partyName = pMatch ? pMatch.name : "";
     }
 
@@ -1946,24 +2013,24 @@
     var txs = [];
     var ts0 = Date.now();
     var seq = 0;
+    var note = (d.note || "").trim();
 
+    // 드럼 종류별 입고수량: 재생 처리는 이제 별도 체크리스트에서 하므로,
+    // 여기서 등록되는 수량은 곧바로 재고가 되지 않고 재생·매각·폐기
+    // 대기 물량으로 쌓인다 (기사님은 예전처럼 전량 재고로 들어감).
     STATE.drumTypes.forEach(function(dt){
       var c = d.checks[dt.id];
       if (!c || !c.checked) return;
       var qty = parseInt(c.qty, 10);
-      // admin can split off a reclaim (재생) amount; anything not explicitly
-      // marked as reclaimed counts as scrap, so a blank field means 0, not
-      // the full qty (drivers never see this field, so their full qty
-      // still becomes stock — there's no split to make).
-      var goodQty = qty;
-      if (isAdmin) goodQty = (c.goodQty !== "" && c.goodQty != null) ? parseInt(c.goodQty, 10) : 0;
-      resultItems.push({ name: dt.name, qty: qty, goodQty: goodQty });
+      var goodQty = isDriver ? qty : 0;
+      resultItems.push({ name: dt.name, qty: qty, txType: "in" });
       txs.push({
         id: genId(), type: "in", date: d.date, drumTypeId: dt.id,
-        qty: qty, goodQty: goodQty, party: partyName, partyId: partyId, handler: handlerName,
+        qty: qty, goodQty: goodQty, decoupled: true,
+        party: partyName, partyId: partyId, handler: handlerName,
         driverId: isDriver ? session.driverId : null,
         adminType: isAdmin ? session.adminType : null,
-        note: (d.note || "").trim(), ts: ts0 + (seq++)
+        note: note, ts: ts0 + (seq++)
       });
     });
 
@@ -1971,40 +2038,60 @@
       var resolved = resolveDrumType({ drumTypeId: OTHER_DRUM_ID, drumTypeOther: d.otherName }, newDrumTypes);
       newDrumTypes = resolved.drumTypes;
       var oQty = parseInt(d.otherQty, 10);
-      var oGood = oQty;
-      if (isAdmin) oGood = (d.otherGoodQty !== "" && d.otherGoodQty != null) ? parseInt(d.otherGoodQty, 10) : 0;
+      var oGood = isDriver ? oQty : 0;
       var dtObj = newDrumTypes.filter(function(t){ return t.id === resolved.id; })[0];
-      resultItems.push({ name: dtObj ? dtObj.name : "", qty: oQty, goodQty: oGood });
+      resultItems.push({ name: dtObj ? dtObj.name : "", qty: oQty, txType: "in" });
       txs.push({
         id: genId(), type: "in", date: d.date, drumTypeId: resolved.id,
-        qty: oQty, goodQty: oGood, party: partyName, partyId: partyId, handler: handlerName,
+        qty: oQty, goodQty: oGood, decoupled: true,
+        party: partyName, partyId: partyId, handler: handlerName,
         driverId: isDriver ? session.driverId : null,
         adminType: isAdmin ? session.adminType : null,
-        note: (d.note || "").trim(), ts: ts0 + (seq++)
+        note: note, ts: ts0 + (seq++)
+      });
+    }
+
+    // 하루 재생 드럼 수량: 관리자 전용, 입고 체크와 완전히 독립적으로
+    // 등록되는 실제 재고 증가 처리 실적.
+    if (isAdmin){
+      STATE.drumTypes.forEach(function(dt){
+        var p = d.produced[dt.id];
+        if (!p || !p.checked) return;
+        var pQty = parseInt(p.qty, 10);
+        resultItems.push({ name: dt.name, qty: pQty, txType: "produced" });
+        txs.push({
+          id: genId(), type: "produced", date: d.date, drumTypeId: dt.id,
+          qty: pQty, adminType: session.adminType, note: note, ts: ts0 + (seq++)
+        });
       });
     }
 
     var newState = Object.assign({}, STATE, { drumTypes: newDrumTypes, transactions: STATE.transactions.concat(txs) });
-    if (!isDriver) saveLastHandler(handlerName);
+    if (anyIn && !isDriver) saveLastHandler(handlerName);
+
+    var hasProducedTx = txs.some(function(t){ return t.type === "produced"; });
+    var flashMsg = anyIn
+      ? (hasProducedTx ? "입고와 재생 생산량을 등록했어요" : "입고를 등록했어요")
+      : "재생 생산량을 등록했어요";
 
     submitting["in"] = true; render();
-    publishState(newState, { flash: "입고를 등록했어요", keepTab: "in" }).then(function(res){
+    publishState(newState, { flash: flashMsg, keepTab: "in" }).then(function(res){
       submitting["in"] = false;
       if (res.ok){
         lastResult["in"] = {
           date: d.date, partyName: partyName, handlerName: handlerName,
           adminType: isAdmin ? session.adminType : null,
-          note: (d.note || "").trim(), items: resultItems
+          note: note, items: resultItems
         };
         formView["in"] = "result";
         formDrafts["in"] = {
-          date: todayStr(), checks: {},
-          otherChecked: false, otherName: "", otherQty: "", otherGoodQty: "",
+          date: todayStr(), checks: {}, produced: {},
+          otherChecked: false, otherName: "", otherQty: "",
           partyId: d.partyId, party: (d.partyId === OTHER_PARTY_ID ? "" : d.party),
           handler: d.handler, note: ""
         };
         ensureInChecks(formDrafts["in"]);
-        formErrors["in"] = { checks: {}, otherCheck: {} };
+        formErrors["in"] = { checks: {}, otherCheck: {}, produced: {} };
         ss_set(DRAFT_KEY, JSON.stringify(formDrafts));
         render();
       } else {
@@ -2257,18 +2344,25 @@
   function onInput(e){
     var el = e.target;
     if (!el.dataset || !el.dataset.field) return;
-    if (el.dataset.field === "checkToggle" || el.dataset.field === "otherToggle") return; // handled in onChange
-    if (el.dataset.field === "checkQty" || el.dataset.field === "checkGoodQty"){
+    if (el.dataset.field === "checkToggle" || el.dataset.field === "otherToggle" || el.dataset.field === "producedToggle") return; // handled in onChange
+    if (el.dataset.field === "checkQty"){
       var checkForm = el.closest("[data-form]");
       var checkKind = checkForm && formDrafts[checkForm.dataset.form] ? checkForm.dataset.form : "in";
       var checkId = el.dataset.id;
       var dCheck = formDrafts[checkKind];
-      if (!dCheck.checks[checkId]) dCheck.checks[checkId] = { checked: false, qty: "", goodQty: "" };
-      dCheck.checks[checkId][el.dataset.field === "checkGoodQty" ? "goodQty" : "qty"] = el.value;
+      if (!dCheck.checks[checkId]) dCheck.checks[checkId] = { checked: false, qty: "" };
+      dCheck.checks[checkId].qty = el.value;
       scheduleDraftSave();
       return;
     }
-    if (el.dataset.field === "otherName" || el.dataset.field === "otherQty" || el.dataset.field === "otherGoodQty"){
+    if (el.dataset.field === "producedQty"){
+      var producedId = el.dataset.id;
+      if (!formDrafts["in"].produced[producedId]) formDrafts["in"].produced[producedId] = { checked: false, qty: "" };
+      formDrafts["in"].produced[producedId].qty = el.value;
+      scheduleDraftSave();
+      return;
+    }
+    if (el.dataset.field === "otherName" || el.dataset.field === "otherQty"){
       var otherForm = el.closest("[data-form]");
       var otherKind = otherForm && formDrafts[otherForm.dataset.form] ? otherForm.dataset.form : "in";
       formDrafts[otherKind][el.dataset.field] = el.value;
@@ -2316,7 +2410,7 @@
       var checkId = el.dataset.id;
       var dToggle = formDrafts[toggleKind];
       if (toggleKind === "in") ensureInChecks(dToggle); else ensureOutChecks(dToggle);
-      if (!dToggle.checks[checkId]) dToggle.checks[checkId] = { checked: false, qty: "", goodQty: "" };
+      if (!dToggle.checks[checkId]) dToggle.checks[checkId] = { checked: false, qty: "" };
       dToggle.checks[checkId].checked = el.checked;
       scheduleDraftSave();
       render();
@@ -2326,6 +2420,15 @@
       var otherToggleForm = el.closest("[data-form]");
       var otherToggleKind = otherToggleForm && formDrafts[otherToggleForm.dataset.form] ? otherToggleForm.dataset.form : "in";
       formDrafts[otherToggleKind].otherChecked = el.checked;
+      scheduleDraftSave();
+      render();
+      return;
+    }
+    if (el.dataset && el.dataset.field === "producedToggle"){
+      var producedId = el.dataset.id;
+      ensureInChecks(formDrafts["in"]);
+      if (!formDrafts["in"].produced[producedId]) formDrafts["in"].produced[producedId] = { checked: false, qty: "" };
+      formDrafts["in"].produced[producedId].checked = el.checked;
       scheduleDraftSave();
       render();
       return;
@@ -2349,7 +2452,7 @@
       return;
     }
     onInput(e);
-    if (el.dataset && (el.dataset.field === "partyId" || el.dataset.field === "checkQty" || el.dataset.field === "checkGoodQty" || el.dataset.field === "otherQty" || el.dataset.field === "otherGoodQty" || el.dataset.field === "scrapSoldQty" || el.dataset.field === "scrapDisposedQty")){ render(); }
+    if (el.dataset && (el.dataset.field === "partyId" || el.dataset.field === "checkQty" || el.dataset.field === "otherQty" || el.dataset.field === "producedQty" || el.dataset.field === "scrapSoldQty" || el.dataset.field === "scrapDisposedQty")){ render(); }
   }
 
   /* ---------- init ---------- */
