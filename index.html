@@ -410,6 +410,7 @@
   var STATE_KEY = "gongdrum_state_v1";
   var OTHER_PARTY_ID = "__other__";
   var OTHER_DRUM_ID = "__other_drum__";
+  var OTHER_HANDLER_ID = "__other_handler__";
   var ADMIN_TABS = ["dashboard","in","out","produced","history","report","settings"];
   var DRIVER_TABS = ["in","out","history"];
 
@@ -446,13 +447,13 @@
     "in": {
       date: "", checks: {},
       otherChecked: false, otherName: "", otherQty: "",
-      partyId: "", party: "", handler: "", note: ""
+      partyId: "", party: "", handlerId: "", handler: "", note: ""
     },
     "out": {
       date: "", checks: {},
       otherChecked: false, otherName: "", otherQty: "",
       scrapSold: {}, scrapDisposed: {},
-      partyId: "", party: "", handler: "", note: ""
+      partyId: "", party: "", handlerId: "", handler: "", note: ""
     },
     "produced": {
       producedDate: "", produced: {}, note: ""
@@ -608,6 +609,14 @@
     if (inDrivers) return true;
     return state.admins.some(function(a){ return a.id !== excludeId && a.username.toLowerCase() === lower; });
   }
+  // 담당자 선택 목록에서 이름으로 등록된 기사님을 찾는다. 일치하는 기사가
+  // 없으면(관리자 본인이 직접 처리했거나 아직 등록 안 된 사람) "기타
+  // (직접 입력)"로 취급한다.
+  function resolveHandlerIdForName(name){
+    if (!name) return "";
+    var match = STATE.drivers.filter(function(dr){ return dr.name === name; })[0];
+    return match ? match.id : OTHER_HANDLER_ID;
+  }
 
   /* ---------- persistence helpers (per-viewer, not shared) ---------- */
   function ss_get(k){ try { return sessionStorage.getItem(k); } catch(e){ return null; } }
@@ -661,6 +670,16 @@
   }
   function lastHandler(){
     return ls_get(HANDLER_KEY) || "";
+  }
+  // 마지막으로 쓴 담당자 이름을 담당자 선택 목록(handlerId)에 맞춰
+  // 되살린다. 등록된 기사님 이름과 일치하면 그 기사를 선택해두고,
+  // 아니면 "기타 (직접 입력)"에 이름을 채워둔다.
+  function prefillHandler(kind){
+    var d = formDrafts[kind];
+    if (d.handlerId) return;
+    var name = d.handler || lastHandler();
+    d.handlerId = resolveHandlerIdForName(name);
+    d.handler = d.handlerId === OTHER_HANDLER_ID ? name : "";
   }
 
   /* ---------- toast / banner ---------- */
@@ -1022,10 +1041,21 @@
       html += '<input class="input" data-field="editTxParty" value="' + esc(d.party) + '"></div>';
       if (err.party) html += '<div class="err">' + esc(err.party) + '</div>';
     }
-    html += '<div class="field' + (err.handler?" has-err":"") + '"><label>담당자</label>';
-    html += '<input class="input" data-field="editTxHandler" value="' + esc(d.handler) + '">';
-    if (err.handler) html += '<div class="err">' + esc(err.handler) + '</div>';
+    html += '<div class="field' + (err.handlerId?" has-err":"") + '"><label>담당자</label>';
+    html += '<select class="input" data-field="editTxHandlerId">';
+    html += '<option value="">선택해주세요</option>';
+    STATE.drivers.forEach(function(dr){
+      html += '<option value="' + dr.id + '"' + (d.handlerId === dr.id ? " selected" : "") + '>' + esc(dr.name) + '</option>';
+    });
+    html += '<option value="' + OTHER_HANDLER_ID + '"' + (d.handlerId === OTHER_HANDLER_ID ? " selected" : "") + '>기타 (직접 입력)</option>';
+    html += '</select>';
+    if (err.handlerId) html += '<div class="err">' + esc(err.handlerId) + '</div>';
     html += '</div>';
+    if (d.handlerId === OTHER_HANDLER_ID){
+      html += '<div class="field' + (err.handler?" has-err":"") + '"><label>담당자 직접 입력</label>';
+      html += '<input class="input" data-field="editTxHandler" value="' + esc(d.handler) + '"></div>';
+      if (err.handler) html += '<div class="err">' + esc(err.handler) + '</div>';
+    }
     html += '<div class="field"><label>비고 (선택)</label><textarea class="input" data-field="editTxNote">' + esc(d.note) + '</textarea></div>';
     html += '<div style="display:flex;gap:8px">';
     html += '<button type="button" class="btn primary small" data-action="saveTxEdit" data-id="' + t.id + '">저장</button>';
@@ -1340,7 +1370,7 @@
     if (session && session.role === "driver"){
       html += '<div class="stock-hint">담당자 <b>' + esc(session.name) + '</b> 님으로 등록돼요</div>';
     } else {
-      html += field("handler", "담당자", "text", d.handler, err.handler, "이름을 입력해주세요");
+      html += renderHandlerField(d, err);
     }
 
     html += '<div class="field"><label for="f-note">비고 (선택)</label>';
@@ -1549,7 +1579,7 @@
     if (session && session.role === "driver"){
       html += '<div class="stock-hint">담당자 <b>' + esc(session.name) + '</b> 님으로 등록돼요</div>';
     } else {
-      html += field("handler", "담당자", "text", d.handler, err.handler, "이름을 입력해주세요");
+      html += renderHandlerField(d, err);
     }
 
     html += '<div class="field"><label for="f-note">비고 (선택)</label>';
@@ -1609,6 +1639,28 @@
     html += '<input class="input" id="f-' + name + '" type="' + type + '" data-field="' + name + '" value="' + esc(value) + '"' + (placeholder?(' placeholder="'+esc(placeholder)+'"'):"") + '>';
     if (error) html += '<div class="err">' + esc(error) + '</div>';
     return html + '</div>';
+  }
+
+  // 전체관리자·생산관리자용 담당자 선택: 등록된 기사님 목록에서 고르거나
+  // "기타 (직접 입력)"으로 이름을 직접 적을 수 있다. 기사님 로그인은
+  // 이 필드 자체를 보지 않고 자기 이름으로 자동 등록된다.
+  function renderHandlerField(d, err){
+    var html = '<div class="field' + (err.handlerId?" has-err":"") + '">';
+    html += '<label for="f-handlerId">담당자</label>';
+    html += '<select class="input" id="f-handlerId" data-field="handlerId">';
+    html += '<option value="">선택해주세요</option>';
+    STATE.drivers.forEach(function(dr){
+      var sel = d.handlerId === dr.id ? " selected" : "";
+      html += '<option value="' + dr.id + '"' + sel + '>' + esc(dr.name) + '</option>';
+    });
+    html += '<option value="' + OTHER_HANDLER_ID + '"' + (d.handlerId === OTHER_HANDLER_ID ? " selected" : "") + '>기타 (직접 입력)</option>';
+    html += '</select>';
+    if (err.handlerId) html += '<div class="err">' + esc(err.handlerId) + '</div>';
+    html += '</div>';
+    if (d.handlerId === OTHER_HANDLER_ID){
+      html += field("handler", "담당자 직접 입력", "text", d.handler, err.handler, "이름을 입력해주세요");
+    }
+    return html;
   }
 
   function renderPartySection(kind, title, addPlaceholder, inUseTitle){
@@ -1850,7 +1902,7 @@
   }
 
   function outEntryHasErrors(errors){
-    if (errors.date || errors.partyId || errors.party || errors.handler || errors.noneChecked) return true;
+    if (errors.date || errors.partyId || errors.party || errors.handlerId || errors.handler || errors.noneChecked) return true;
     if (errors.checks && Object.keys(errors.checks).some(function(id){ return errors.checks[id] && Object.keys(errors.checks[id]).length > 0; })) return true;
     if (errors.otherCheck && Object.keys(errors.otherCheck).length > 0) return true;
     if (errors.scrapSold && Object.keys(errors.scrapSold).some(function(id){ return errors.scrapSold[id] && Object.keys(errors.scrapSold[id]).length > 0; })) return true;
@@ -1933,7 +1985,10 @@
       if (!d.partyId) errors.partyId = "출고처를 선택해주세요";
       else if (d.partyId === OTHER_PARTY_ID && (!d.party || !d.party.trim())) errors.party = "출고처를 입력해주세요";
       var isDriver = session && session.role === "driver";
-      if (!isDriver && (!d.handler || !d.handler.trim())) errors.handler = "담당자를 입력해주세요";
+      if (!isDriver){
+        if (!d.handlerId) errors.handlerId = "담당자를 선택해주세요";
+        else if (d.handlerId === OTHER_HANDLER_ID && (!d.handler || !d.handler.trim())) errors.handler = "담당자를 입력해주세요";
+      }
     }
     return errors;
   }
@@ -1954,7 +2009,13 @@
       return c && c.checked;
     });
 
-    var handlerName = isDriver ? session.name : (d.handler || "").trim();
+    var handlerName;
+    if (isDriver) handlerName = session.name;
+    else if (d.handlerId === OTHER_HANDLER_ID) handlerName = (d.handler || "").trim();
+    else {
+      var handlerMatch = STATE.drivers.filter(function(dr){ return dr.id === d.handlerId; })[0];
+      handlerName = handlerMatch ? handlerMatch.name : "";
+    }
     var partyId, partyName;
     if (d.partyId === OTHER_PARTY_ID){
       partyId = null;
@@ -2039,7 +2100,7 @@
           otherChecked: false, otherName: "", otherQty: "",
           scrapSold: {}, scrapDisposed: {},
           partyId: d.partyId, party: (d.partyId === OTHER_PARTY_ID ? "" : d.party),
-          handler: d.handler, note: ""
+          handlerId: d.handlerId, handler: d.handler, note: ""
         };
         ensureOutChecks(formDrafts["out"]);
         formErrors["out"] = { checks: {}, otherCheck: {}, scrapSold: {}, scrapDisposed: {} };
@@ -2052,7 +2113,7 @@
   }
 
   function inEntryHasErrors(errors){
-    if (errors.date || errors.partyId || errors.party || errors.handler || errors.noneChecked) return true;
+    if (errors.date || errors.partyId || errors.party || errors.handlerId || errors.handler || errors.noneChecked) return true;
     if (errors.checks && Object.keys(errors.checks).some(function(id){ return errors.checks[id] && Object.keys(errors.checks[id]).length > 0; })) return true;
     if (errors.otherCheck && Object.keys(errors.otherCheck).length > 0) return true;
     return false;
@@ -2088,7 +2149,10 @@
     if (!d.partyId) errors.partyId = "공급처를 선택해주세요";
     else if (d.partyId === OTHER_PARTY_ID && (!d.party || !d.party.trim())) errors.party = "공급처를 입력해주세요";
     var isDriver = session && session.role === "driver";
-    if (!isDriver && (!d.handler || !d.handler.trim())) errors.handler = "담당자를 입력해주세요";
+    if (!isDriver){
+      if (!d.handlerId) errors.handlerId = "담당자를 선택해주세요";
+      else if (d.handlerId === OTHER_HANDLER_ID && (!d.handler || !d.handler.trim())) errors.handler = "담당자를 입력해주세요";
+    }
     return errors;
   }
 
@@ -2133,7 +2197,13 @@
     var isDriver = session.role === "driver";
     var isAdmin = session.role === "admin";
 
-    var handlerName = isDriver ? session.name : (d.handler || "").trim();
+    var handlerName;
+    if (isDriver) handlerName = session.name;
+    else if (d.handlerId === OTHER_HANDLER_ID) handlerName = (d.handler || "").trim();
+    else {
+      var handlerMatch = STATE.drivers.filter(function(dr){ return dr.id === d.handlerId; })[0];
+      handlerName = handlerMatch ? handlerMatch.name : "";
+    }
     var partyId, partyName;
     if (d.partyId === OTHER_PARTY_ID){
       partyId = null;
@@ -2205,7 +2275,7 @@
           date: todayStr(), checks: {},
           otherChecked: false, otherName: "", otherQty: "",
           partyId: d.partyId, party: (d.partyId === OTHER_PARTY_ID ? "" : d.party),
-          handler: d.handler, note: ""
+          handlerId: d.handlerId, handler: d.handler, note: ""
         };
         ensureInChecks(formDrafts["in"]);
         formErrors["in"] = { checks: {}, otherCheck: {} };
@@ -2279,12 +2349,14 @@
     var t = STATE.transactions.filter(function(x){ return x.id === id; })[0];
     if (!t || (t.type !== "in" && t.type !== "out")) return;
     editingTxId = id;
+    var handlerId = resolveHandlerIdForName(t.handler || "");
     editTxDraft = {
       drumTypeId: t.drumTypeId,
       qty: String(t.qty),
       partyId: t.partyId || (t.party ? OTHER_PARTY_ID : ""),
       party: t.partyId ? "" : (t.party || ""),
-      handler: t.handler || "",
+      handlerId: handlerId,
+      handler: handlerId === OTHER_HANDLER_ID ? (t.handler || "") : "",
       note: t.note || ""
     };
     editTxError = {};
@@ -2314,8 +2386,15 @@
       partyName = pMatch ? pMatch.name : "";
       if (!partyId) errors.partyId = partyLabel + '를 선택해주세요';
     }
-    var handler = (editTxDraft.handler || "").trim();
-    if (!handler) errors.handler = "담당자를 입력해주세요";
+    var handler;
+    if (editTxDraft.handlerId === OTHER_HANDLER_ID){
+      handler = (editTxDraft.handler || "").trim();
+      if (!handler) errors.handler = "담당자를 입력해주세요";
+    } else {
+      var handlerMatch = STATE.drivers.filter(function(dr){ return dr.id === editTxDraft.handlerId; })[0];
+      handler = handlerMatch ? handlerMatch.name : "";
+      if (!editTxDraft.handlerId) errors.handlerId = "담당자를 선택해주세요";
+    }
     if (Object.keys(errors).length){ editTxError = errors; render(); return; }
 
     var newState = Object.assign({}, STATE, {
@@ -2611,6 +2690,7 @@
     if (el.dataset.field === "editTxQty"){ if (editTxDraft) editTxDraft.qty = el.value; return; }
     if (el.dataset.field === "editTxPartyId"){ if (editTxDraft) editTxDraft.partyId = el.value; return; }
     if (el.dataset.field === "editTxParty"){ if (editTxDraft) editTxDraft.party = el.value; return; }
+    if (el.dataset.field === "editTxHandlerId"){ if (editTxDraft) editTxDraft.handlerId = el.value; return; }
     if (el.dataset.field === "editTxHandler"){ if (editTxDraft) editTxDraft.handler = el.value; return; }
     if (el.dataset.field === "editTxNote"){ if (editTxDraft) editTxDraft.note = el.value; return; }
     var form = el.closest("[data-form]");
@@ -2676,7 +2756,7 @@
       return;
     }
     onInput(e);
-    if (el.dataset && (el.dataset.field === "partyId" || el.dataset.field === "checkQty" || el.dataset.field === "otherQty" || el.dataset.field === "producedQty" || el.dataset.field === "scrapSoldQty" || el.dataset.field === "scrapDisposedQty" || el.dataset.field === "editTxPartyId")){ render(); }
+    if (el.dataset && (el.dataset.field === "partyId" || el.dataset.field === "handlerId" || el.dataset.field === "checkQty" || el.dataset.field === "otherQty" || el.dataset.field === "producedQty" || el.dataset.field === "scrapSoldQty" || el.dataset.field === "scrapDisposedQty" || el.dataset.field === "editTxPartyId" || el.dataset.field === "editTxHandlerId")){ render(); }
   }
 
   /* ---------- init ---------- */
@@ -2701,8 +2781,8 @@
     loadStateFromDOM();
     restoreSession();
     restoreDrafts();
-    if (!formDrafts["in"].handler) formDrafts["in"].handler = lastHandler();
-    if (!formDrafts["out"].handler) formDrafts["out"].handler = lastHandler();
+    prefillHandler("in");
+    prefillHandler("out");
     if (!formDrafts["in"].date) formDrafts["in"].date = todayStr();
     if (!formDrafts["out"].date) formDrafts["out"].date = todayStr();
 
