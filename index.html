@@ -439,7 +439,7 @@
   var formView = { "in": "form", "out": "form" }; // "form" | "result"
   var lastResult = { "in": null, "out": null };
   var formErrors = {
-    "in": { checks: {}, otherCheck: {} }, "out": { checks: {}, otherCheck: {}, scrapSold: {}, scrapDisposed: {} },
+    "in": { checks: {}, otherCheck: {} }, "out": { checks: {}, otherCheck: {}, scrapDisposed: {} },
     "produced": { produced: {} },
     addType: "", addParty: { "in": "", "out": "" }, addDriver: "", addAdmin: ""
   };
@@ -452,7 +452,7 @@
     "out": {
       date: "", checks: {},
       otherChecked: false, otherName: "", otherQty: "",
-      scrapSold: {}, scrapDisposed: {},
+      scrapDisposed: {},
       partyId: "", party: "", handlerId: "", handler: "", note: ""
     },
     "produced": {
@@ -585,12 +585,11 @@
     });
   }
   // same as ensureInChecks but for the 출고 checklist draft (no goodQty split
-  // needed there); also backfills the admin-only 매각/폐기 checklists that
-  // live on the same draft since the 고철 tab was folded into 출고.
+  // needed there); also backfills the admin-only 고철 폐기 checklist that
+  // lives on the same draft since the 고철 tab was folded into 출고.
   function ensureOutChecks(d){
     STATE.drumTypes.forEach(function(dt){
       if (!d.checks[dt.id]) d.checks[dt.id] = { checked: false, qty: "" };
-      if (!d.scrapSold[dt.id]) d.scrapSold[dt.id] = { checked: false, qty: "" };
       if (!d.scrapDisposed[dt.id]) d.scrapDisposed[dt.id] = { checked: false, qty: "" };
     });
   }
@@ -647,13 +646,10 @@
       if (!formDrafts["out"].checks || typeof formDrafts["out"].checks !== "object" || Array.isArray(formDrafts["out"].checks)){
         formDrafts["out"].checks = {};
       }
-      if (!formDrafts["out"].scrapSold || typeof formDrafts["out"].scrapSold !== "object" || Array.isArray(formDrafts["out"].scrapSold)){
-        formDrafts["out"].scrapSold = {};
-      }
       if (!formDrafts["out"].scrapDisposed || typeof formDrafts["out"].scrapDisposed !== "object" || Array.isArray(formDrafts["out"].scrapDisposed)){
         formDrafts["out"].scrapDisposed = {};
       }
-      formErrors["out"] = { checks: {}, otherCheck: {}, scrapSold: {}, scrapDisposed: {} };
+      formErrors["out"] = { checks: {}, otherCheck: {}, scrapDisposed: {} };
       if (!formDrafts["produced"].produced || typeof formDrafts["produced"].produced !== "object" || Array.isArray(formDrafts["produced"].produced)){
         formDrafts["produced"].produced = {};
       }
@@ -1447,7 +1443,7 @@
   function renderOutForm(){
     var d = formDrafts["out"];
     ensureOutChecks(d);
-    var err = formErrors["out"] || { checks: {}, otherCheck: {}, scrapSold: {}, scrapDisposed: {} };
+    var err = formErrors["out"] || { checks: {}, otherCheck: {}, scrapDisposed: {} };
     var stock = computeReclaimStock(STATE);
     var partyLabel = "출고처";
     var partyPh = "업체명";
@@ -1516,28 +1512,6 @@
     if (err.noneChecked) html += '<div class="err" style="margin:-6px 0 14px">' + esc(err.noneChecked) + '</div>';
 
     if (isAdmin){
-      html += '<div class="field"><label>매각 수량 (선택)</label></div>';
-      STATE.drumTypes.forEach(function(dt){
-        var scrapStock = computeScrapStock(STATE, dt.id);
-        var sc = d.scrapSold[dt.id] || { checked: false, qty: "" };
-        var sErr = (err.scrapSold && err.scrapSold[dt.id]) || {};
-        html += '<div class="check-row' + (sc.checked?" checked":"") + '">';
-        html += '<label class="check-row-head"><input type="checkbox" data-field="scrapSoldToggle" data-id="' + dt.id + '"' + (sc.checked?" checked":"") + '><span>' + esc(dt.name) + '</span></label>';
-        if (sc.checked){
-          html += '<div class="check-row-fields">';
-          html += '<div class="field">';
-          html += '<div class="stock-hint">보유 고철 재고 <b class="num">' + fmtNum(scrapStock) + '개</b></div>';
-          html += '</div>';
-          html += '<div class="field' + (sErr.qty?" has-err":"") + '">';
-          html += '<label>매각 수량</label>';
-          html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="1" step="1" placeholder="0" data-field="scrapSoldQty" data-id="' + dt.id + '" value="' + esc(sc.qty) + '"><span class="unit">개</span></div>';
-          if (sErr.qty) html += '<div class="err">' + esc(sErr.qty) + '</div>';
-          html += '</div>';
-          html += '</div>';
-        }
-        html += '</div>';
-      });
-
       html += '<div class="field"><label>고철 폐기 수량 (선택)</label></div>';
       STATE.drumTypes.forEach(function(dt){
         var scrapStockD = computeScrapStock(STATE, dt.id);
@@ -1905,13 +1879,12 @@
     if (errors.date || errors.partyId || errors.party || errors.handlerId || errors.handler || errors.noneChecked) return true;
     if (errors.checks && Object.keys(errors.checks).some(function(id){ return errors.checks[id] && Object.keys(errors.checks[id]).length > 0; })) return true;
     if (errors.otherCheck && Object.keys(errors.otherCheck).length > 0) return true;
-    if (errors.scrapSold && Object.keys(errors.scrapSold).some(function(id){ return errors.scrapSold[id] && Object.keys(errors.scrapSold[id]).length > 0; })) return true;
     if (errors.scrapDisposed && Object.keys(errors.scrapDisposed).some(function(id){ return errors.scrapDisposed[id] && Object.keys(errors.scrapDisposed[id]).length > 0; })) return true;
     return false;
   }
 
   function validateOutEntry(d){
-    var errors = { checks: {}, otherCheck: {}, scrapSold: {}, scrapDisposed: {} };
+    var errors = { checks: {}, otherCheck: {}, scrapDisposed: {} };
     if (!d.date) errors.date = "날짜를 선택해주세요";
 
     var stock = computeReclaimStock(STATE);
@@ -1947,39 +1920,25 @@
       if (Object.keys(oErr).length) errors.otherCheck = oErr;
     }
 
-    // 매각/폐기는 관리자만 등록할 수 있어요 (기사님은 해당 체크박스 자체를 볼 수 없어요).
+    // 폐기는 관리자만 등록할 수 있어요 (기사님은 해당 체크박스 자체를 볼 수 없어요).
     if (isAdmin){
       STATE.drumTypes.forEach(function(dt){
         var scrapAvail = computeScrapStock(STATE, dt.id);
-        var used = 0;
-        var sc = d.scrapSold[dt.id];
         var dc = d.scrapDisposed[dt.id];
-        var sErr = {}, dErr = {};
-        if (sc && sc.checked){
-          anyScrapChecked = true;
-          var sQty = parseInt(sc.qty, 10);
-          if (!sQty || sQty <= 0) sErr.qty = "수량을 입력해주세요";
-          else used += sQty;
-        }
+        var dErr = {};
         if (dc && dc.checked){
           anyScrapChecked = true;
           var dQty = parseInt(dc.qty, 10);
           if (!dQty || dQty <= 0) dErr.qty = "수량을 입력해주세요";
-          else used += dQty;
+          else if (dQty > scrapAvail) dErr.qty = "고철 재고보다 많아요 (현재 " + fmtNum(scrapAvail) + "개)";
         }
-        if (used > scrapAvail){
-          var msg = "고철 재고보다 많아요 (현재 " + fmtNum(scrapAvail) + "개)";
-          if (sc && sc.checked && !sErr.qty) sErr.qty = msg;
-          if (dc && dc.checked && !dErr.qty) dErr.qty = msg;
-        }
-        if (Object.keys(sErr).length) errors.scrapSold[dt.id] = sErr;
         if (Object.keys(dErr).length) errors.scrapDisposed[dt.id] = dErr;
       });
     }
 
-    if (!anyOutChecked && !anyScrapChecked) errors.noneChecked = "출고하거나 매각·폐기할 드럼 종류를 하나 이상 선택해주세요";
+    if (!anyOutChecked && !anyScrapChecked) errors.noneChecked = "출고하거나 폐기할 드럼 종류를 하나 이상 선택해주세요";
 
-    // 출고처·담당자는 실제 출고 항목이 있을 때만 필요해요. 매각·폐기만
+    // 출고처·담당자는 실제 출고 항목이 있을 때만 필요해요. 폐기만
     // 등록할 때는 (예전 고철 탭처럼) 필요 없어요.
     if (anyOutChecked){
       if (!d.partyId) errors.partyId = "출고처를 선택해주세요";
@@ -2060,15 +2019,9 @@
       });
     }
 
-    // 매각·폐기는 관리자 전용 (기사님 화면에는 해당 체크박스가 아예 없어요).
+    // 폐기는 관리자 전용 (기사님 화면에는 해당 체크박스가 아예 없어요).
     if (isAdmin){
       STATE.drumTypes.forEach(function(dt){
-        var sc = d.scrapSold[dt.id];
-        if (sc && sc.checked){
-          var sQty = parseInt(sc.qty, 10);
-          resultItems.push({ name: dt.name, qty: sQty, goodQty: null, txType: "sold" });
-          txs.push({ id: genId(), type: "sold", date: d.date, drumTypeId: dt.id, qty: sQty, note: note, ts: ts0 + (seq++) });
-        }
         var dc = d.scrapDisposed[dt.id];
         if (dc && dc.checked){
           var dQty = parseInt(dc.qty, 10);
@@ -2081,10 +2034,10 @@
     var newState = Object.assign({}, STATE, { drumTypes: newDrumTypes, transactions: STATE.transactions.concat(txs) });
     if (anyOutChecked && !isDriver) saveLastHandler(handlerName);
 
-    var hasScrapTx = txs.some(function(t){ return t.type === "sold" || t.type === "disposed"; });
+    var hasScrapTx = txs.some(function(t){ return t.type === "disposed"; });
     var flashMsg = anyOutChecked
-      ? (hasScrapTx ? "출고와 매각·폐기를 등록했어요" : "출고를 등록했어요")
-      : "매각·폐기를 등록했어요";
+      ? (hasScrapTx ? "출고와 폐기를 등록했어요" : "출고를 등록했어요")
+      : "폐기를 등록했어요";
 
     submitting["out"] = true; render();
     publishState(newState, { flash: flashMsg, keepTab: "out" }).then(function(res){
@@ -2098,12 +2051,12 @@
         formDrafts["out"] = {
           date: todayStr(), checks: {},
           otherChecked: false, otherName: "", otherQty: "",
-          scrapSold: {}, scrapDisposed: {},
+          scrapDisposed: {},
           partyId: d.partyId, party: (d.partyId === OTHER_PARTY_ID ? "" : d.party),
           handlerId: d.handlerId, handler: d.handler, note: ""
         };
         ensureOutChecks(formDrafts["out"]);
-        formErrors["out"] = { checks: {}, otherCheck: {}, scrapSold: {}, scrapDisposed: {} };
+        formErrors["out"] = { checks: {}, otherCheck: {}, scrapDisposed: {} };
         ss_set(DRAFT_KEY, JSON.stringify(formDrafts));
         render();
       } else {
@@ -2667,9 +2620,9 @@
       return;
     }
     if (el.dataset.field === "reportDate"){ reportDate = el.value; render(); return; }
-    if (el.dataset.field === "scrapSoldQty" || el.dataset.field === "scrapDisposedQty"){
+    if (el.dataset.field === "scrapDisposedQty"){
       var scrapId = el.dataset.id;
-      var bucket = el.dataset.field === "scrapSoldQty" ? formDrafts["out"].scrapSold : formDrafts["out"].scrapDisposed;
+      var bucket = formDrafts["out"].scrapDisposed;
       if (!bucket[scrapId]) bucket[scrapId] = { checked: false, qty: "" };
       bucket[scrapId].qty = el.value;
       scheduleDraftSave();
@@ -2737,15 +2690,6 @@
       render();
       return;
     }
-    if (el.dataset && el.dataset.field === "scrapSoldToggle"){
-      var soldId = el.dataset.id;
-      ensureOutChecks(formDrafts["out"]);
-      if (!formDrafts["out"].scrapSold[soldId]) formDrafts["out"].scrapSold[soldId] = { checked: false, qty: "" };
-      formDrafts["out"].scrapSold[soldId].checked = el.checked;
-      scheduleDraftSave();
-      render();
-      return;
-    }
     if (el.dataset && el.dataset.field === "scrapDisposedToggle"){
       var disposedId = el.dataset.id;
       ensureOutChecks(formDrafts["out"]);
@@ -2756,7 +2700,7 @@
       return;
     }
     onInput(e);
-    if (el.dataset && (el.dataset.field === "partyId" || el.dataset.field === "handlerId" || el.dataset.field === "checkQty" || el.dataset.field === "otherQty" || el.dataset.field === "producedQty" || el.dataset.field === "scrapSoldQty" || el.dataset.field === "scrapDisposedQty" || el.dataset.field === "editTxPartyId" || el.dataset.field === "editTxHandlerId")){ render(); }
+    if (el.dataset && (el.dataset.field === "partyId" || el.dataset.field === "handlerId" || el.dataset.field === "checkQty" || el.dataset.field === "otherQty" || el.dataset.field === "producedQty" || el.dataset.field === "scrapDisposedQty" || el.dataset.field === "editTxPartyId" || el.dataset.field === "editTxHandlerId")){ render(); }
   }
 
   /* ---------- init ---------- */
