@@ -981,7 +981,7 @@
   }
 
   /* ---------- render: tx row ---------- */
-  var HISTORY_PILL = { in: "입고", out: "출고", produced: "재생" };
+  var HISTORY_PILL = { in: "입고", out: "출고", produced: "재생", disposed: "고철" };
 
   function renderTxRow(t, withDelete, editable){
     if (editable && editingTxId === t.id) return renderTxEditForm(t);
@@ -1095,7 +1095,7 @@
     html += '<div class="filter-row">';
     html += '<div class="seg">';
     var filters = [["all","전체"],["in","입고"],["out","출고"]];
-    if (isAdmin) filters.push(["produced","재생"]);
+    if (isAdmin) filters.push(["produced","재생"], ["disposed","고철"]);
     filters.forEach(function(f){
       html += '<button type="button" class="' + (historyFilterType===f[0]?"active":"") + '" data-action="setHistoryType" data-value="' + f[0] + '">' + f[1] + '</button>';
     });
@@ -1109,7 +1109,7 @@
     html += '</div>';
 
     var restrictToOwn = session && session.role === "driver";
-    var allowedTypes = isAdmin ? ["in","out","produced"] : ["in","out"];
+    var allowedTypes = isAdmin ? ["in","out","produced","disposed"] : ["in","out"];
     var list = STATE.transactions.filter(function(t){
       if (allowedTypes.indexOf(t.type) === -1) return false;
       if (restrictToOwn){
@@ -1136,16 +1136,19 @@
   /* ---------- render: daily report ---------- */
   function computeDailySummary(date){
     return STATE.drumTypes.map(function(dt){
-      var inQty = 0, outQty = 0, producedQty = 0;
+      var inQty = 0, outQty = 0, producedQty = 0, disposedQty = 0;
       STATE.transactions.forEach(function(t){
         if (t.date !== date || t.drumTypeId !== dt.id) return;
         if (t.type === "in") inQty += t.qty;
         else if (t.type === "out") outQty += t.qty;
         else if (t.type === "produced") producedQty += t.qty;
+        else if (t.type === "disposed") disposedQty += t.qty;
       });
       // 재고를 실제로 늘리는 건 재생 처리뿐이라, 그날의 순증감도 입고가
       // 아니라 재생 기준으로 계산한다 (입고는 참고용으로 별도 표시).
-      return { id: dt.id, name: dt.name, in: inQty, out: outQty, produced: producedQty, net: producedQty - outQty };
+      // 고철 폐기는 재생량 재고와 무관한 값이라 순증감 계산에는 넣지
+      // 않고 참고용 컬럼으로만 함께 보여준다.
+      return { id: dt.id, name: dt.name, in: inQty, out: outQty, produced: producedQty, disposed: disposedQty, net: producedQty - outQty };
     });
   }
 
@@ -1173,10 +1176,12 @@
     var totalIn = summary.reduce(function(s,r){ return s + r.in; }, 0);
     var totalOut = summary.reduce(function(s,r){ return s + r.out; }, 0);
     var totalProduced = summary.reduce(function(s,r){ return s + r.produced; }, 0);
+    var totalDisposed = summary.reduce(function(s,r){ return s + r.disposed; }, 0);
     var partyGroups = computePartySummary(reportDate);
     var hasPartyActivity = partyGroups.length > 0;
     var hasProducedActivity = STATE.transactions.some(function(t){ return t.type === "produced" && t.date === reportDate; });
-    var hasActivity = hasPartyActivity || hasProducedActivity;
+    var hasDisposedActivity = STATE.transactions.some(function(t){ return t.type === "disposed" && t.date === reportDate; });
+    var hasActivity = hasPartyActivity || hasProducedActivity || hasDisposedActivity;
 
     var html = "";
     html += '<div class="section-title">일일 입출고 현황</div>';
@@ -1187,6 +1192,7 @@
     html += '<div class="stat-box"><div class="stat-label">총입고량</div><div class="stat-value num">' + fmtNum(totalIn) + '<small>개</small></div></div>';
     html += '<div class="stat-box"><div class="stat-label">총재생량</div><div class="stat-value num">' + fmtNum(totalProduced) + '<small>개</small></div></div>';
     html += '<div class="stat-box"><div class="stat-label">총출고량</div><div class="stat-value num">' + fmtNum(totalOut) + '<small>개</small></div></div>';
+    html += '<div class="stat-box"><div class="stat-label">총고철량</div><div class="stat-value num">' + fmtNum(totalDisposed) + '<small>개</small></div></div>';
     html += '</div>';
 
     html += '<button type="button" class="btn primary" data-action="downloadExcel" style="margin-top:14px"' + (hasActivity ? "" : " disabled") + '>엑셀로 다운로드</button>';
@@ -1217,12 +1223,13 @@
     if (!hasActivity){
       html += '<div class="empty">이 날짜에 등록된 입출고 기록이 없어요.</div>';
     } else {
-      html += '<div class="report-table-wrap"><table class="report-table"><thead><tr><th>드럼 종류</th><th>입고</th><th>재생</th><th>출고</th><th>순증감</th></tr></thead><tbody>';
+      html += '<div class="report-table-wrap"><table class="report-table"><thead><tr><th>드럼 종류</th><th>입고</th><th>재생</th><th>출고</th><th>고철</th><th>순증감</th></tr></thead><tbody>';
       summary.forEach(function(r){
         html += '<tr><td>' + esc(r.name) + '</td>';
         html += '<td class="num in">' + (r.in ? "+" + fmtNum(r.in) : "-") + '</td>';
         html += '<td class="num in">' + (r.produced ? "+" + fmtNum(r.produced) : "-") + '</td>';
         html += '<td class="num out">' + (r.out ? "-" + fmtNum(r.out) : "-") + '</td>';
+        html += '<td class="num out">' + (r.disposed ? "-" + fmtNum(r.disposed) : "-") + '</td>';
         html += '<td class="num">' + (r.net > 0 ? "+" : "") + fmtNum(r.net) + '</td></tr>';
       });
       html += '</tbody></table></div>';
@@ -1256,8 +1263,8 @@
     });
 
     var summary = computeDailySummary(date);
-    var summaryRows = [["드럼 종류", "입고", "재생", "출고", "순증감"]];
-    summary.forEach(function(r){ summaryRows.push([r.name, r.in, r.produced, r.out, r.net]); });
+    var summaryRows = [["드럼 종류", "입고", "재생", "출고", "고철", "순증감"]];
+    summary.forEach(function(r){ summaryRows.push([r.name, r.in, r.produced, r.out, r.disposed, r.net]); });
 
     var producedRows = [["드럼 종류", "재생 수량", "등록 유형", "비고"]];
     STATE.transactions.forEach(function(t){
@@ -1269,11 +1276,18 @@
       ]);
     });
 
+    var disposedRows = [["드럼 종류", "폐기 수량", "출고처", "담당자", "비고"]];
+    STATE.transactions.forEach(function(t){
+      if (t.type !== "disposed" || t.date !== date) return;
+      disposedRows.push([drumName(t.drumTypeId), t.qty, t.party || "", t.handler || "", t.note || ""]);
+    });
+
     var wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(partyRows), "업체별 요약");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detailRows), "상세");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), "종류별 요약");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(producedRows), "재생 상세");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(disposedRows), "고철 폐기 상세");
     XLSX.writeFile(wb, "공드럼_입출고_" + date + ".xlsx");
   }
 
