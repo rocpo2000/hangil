@@ -1112,14 +1112,10 @@
     var allowedTypes = isAdmin ? ["in","out","produced","disposed"] : ["in","out"];
     var list = STATE.transactions.filter(function(t){
       if (allowedTypes.indexOf(t.type) === -1) return false;
-      if (restrictToOwn){
-        // Match records logged through this driver's own login (driverId),
-        // and also older/admin-entered records where only the 담당자 name
-        // was recorded (no driverId yet) — so nothing they own goes missing.
-        var byId = t.driverId && t.driverId === session.driverId;
-        var byName = !t.driverId && t.handler === session.name;
-        if (!byId && !byName) return false;
-      }
+      // Match records logged through this driver's own login (driverId),
+      // and also older/admin-entered records where only the 담당자 name
+      // was recorded (no driverId yet) — so nothing they own goes missing.
+      if (restrictToOwn && !txOwnedByDriver(t, session)) return false;
       if (historyFilterType !== "all" && t.type !== historyFilterType) return false;
       if (historyFilterDrum !== "all" && t.drumTypeId !== historyFilterDrum) return false;
       return true;
@@ -1128,7 +1124,13 @@
     if (list.length === 0){
       html += '<div class="empty">' + (restrictToOwn ? "아직 등록한 기록이 없어요." : "조건에 맞는 기록이 없어요.") + '</div>';
     } else {
-      list.forEach(function(t){ html += renderTxRow(t, true); });
+      // 입고/출고 기록은 관리자와 (본인 소유 기록에 한해) 기사님 모두
+      // 이력 페이지에서 바로 수정할 수 있다. 재생·고철 기록은 이 화면의
+      // 수정 폼이 지원하지 않으므로 대상에서 제외한다.
+      list.forEach(function(t){
+        var editable = (t.type === "in" || t.type === "out") && (isAdmin || restrictToOwn);
+        html += renderTxRow(t, true, editable);
+      });
     }
     return html;
   }
@@ -2410,13 +2412,20 @@
     render();
   }
 
+  // 기사님은 자신의 driverId(또는 driverId가 없던 시절 기록은 담당자
+  // 이름)로 등록된 입고/출고 기록만 수정·삭제할 수 있다.
+  function txOwnedByDriver(t, sess){
+    if (!t) return false;
+    var ownedById = t.driverId && t.driverId === sess.driverId;
+    var ownedByName = !t.driverId && t.handler === sess.name;
+    return ownedById || ownedByName;
+  }
+
   function deleteTx(id){
     if (!session || isReadOnly) return;
     if (session.role === "driver"){
       var own = STATE.transactions.filter(function(t){ return t.id === id; })[0];
-      var ownedById = own && own.driverId && own.driverId === session.driverId;
-      var ownedByName = own && !own.driverId && own.handler === session.name;
-      if (!own || (!ownedById && !ownedByName)) return;
+      if (!txOwnedByDriver(own, session)) return;
     }
     if (pendingDeleteTx !== id){ pendingDeleteTx = id; render(); return; }
     pendingDeleteTx = null;
@@ -2425,9 +2434,14 @@
   }
 
   function startTxEdit(id){
-    if (!session || session.role !== "admin") return;
+    if (!session) return;
     var t = STATE.transactions.filter(function(x){ return x.id === id; })[0];
     if (!t || (t.type !== "in" && t.type !== "out")) return;
+    if (session.role === "driver"){
+      if (!txOwnedByDriver(t, session)) return;
+    } else if (session.role !== "admin"){
+      return;
+    }
     editingTxId = id;
     var handlerId = resolveHandlerIdForName(t.handler || "");
     editTxDraft = {
@@ -2447,9 +2461,14 @@
     render();
   }
   function saveTxEdit(id){
-    if (!session || session.role !== "admin" || isReadOnly || !editTxDraft) return;
+    if (!session || isReadOnly || !editTxDraft) return;
     var t = STATE.transactions.filter(function(x){ return x.id === id; })[0];
     if (!t) return;
+    if (session.role === "driver"){
+      if (!txOwnedByDriver(t, session)) return;
+    } else if (session.role !== "admin"){
+      return;
+    }
     var partyLabel = t.type === "in" ? "공급처" : "출고처";
     var errors = {};
     var qty = parseInt(editTxDraft.qty, 10);
