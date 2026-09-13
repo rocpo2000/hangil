@@ -312,6 +312,7 @@
   .type-row button.del:hover{color:var(--danger);}
   .type-row button.del.pending{color:var(--danger);font-weight:700;background:var(--danger-soft);}
   .type-row button:disabled{opacity:.35;cursor:not-allowed;}
+  .type-row button.move-btn{padding:6px 7px;font-size:13px;line-height:1;}
   .type-row.editing{align-items:center;}
   .add-type-row{display:flex;gap:8px;margin-top:12px;}
   .add-type-row input{flex:1;}
@@ -1725,7 +1726,7 @@
     if (list.length === 0){
       html += '<div class="empty">등록된 항목이 없어요. 아래에서 추가해주세요.<br>추가하기 전에는 입고·출고 등록 시 "기타"로만 입력할 수 있어요.</div>';
     } else {
-      list.forEach(function(p){
+      list.forEach(function(p, idx){
         var inUse = partyInUse(STATE, kind, p.id);
         var pendingCls = pendingDeleteParty[kind] === p.id ? " pending" : "";
         html += '<div class="type-row">';
@@ -1736,6 +1737,8 @@
         } else {
           html += '<span class="tname">' + esc(p.name) + '</span>';
           if (inUse) html += '<span class="tcount">사용 중</span>';
+          html += '<button type="button" class="move-btn" data-action="moveParty" data-kind="' + kind + '" data-dir="-1" data-id="' + p.id + '" aria-label="위로 이동"' + (idx===0?" disabled":"") + '>▲</button>';
+          html += '<button type="button" class="move-btn" data-action="moveParty" data-kind="' + kind + '" data-dir="1" data-id="' + p.id + '" aria-label="아래로 이동"' + (idx===list.length-1?" disabled":"") + '>▼</button>';
           html += '<button type="button" data-action="startPartyEdit" data-kind="' + kind + '" data-id="' + p.id + '" aria-label="이름 수정">수정</button>';
           html += '<button type="button" class="del' + pendingCls + '" data-action="deleteParty" data-kind="' + kind + '" data-id="' + p.id + '"' + (inUse?(' disabled title="'+esc(inUseTitle)+'"'):"") + '>' + (pendingDeleteParty[kind]===p.id ? "정말?" : "삭제") + '</button>';
         }
@@ -1761,7 +1764,7 @@
     if (STATE.drumTypes.length === 0){
       html += '<div class="empty">등록된 드럼 종류가 없어요. 아래에서 추가해주세요.</div>';
     } else {
-      STATE.drumTypes.forEach(function(dt){
+      STATE.drumTypes.forEach(function(dt, idx){
         var inUse = typeInUse(STATE, dt.id);
         var pendingCls = pendingDeleteType === dt.id ? " pending" : "";
         html += '<div class="type-row">';
@@ -1772,6 +1775,8 @@
         } else {
           html += '<span class="tname">' + esc(dt.name) + '</span>';
           if (inUse) html += '<span class="tcount">사용 중</span>';
+          html += '<button type="button" class="move-btn" data-action="moveType" data-dir="-1" data-id="' + dt.id + '" aria-label="위로 이동"' + (idx===0?" disabled":"") + '>▲</button>';
+          html += '<button type="button" class="move-btn" data-action="moveType" data-dir="1" data-id="' + dt.id + '" aria-label="아래로 이동"' + (idx===STATE.drumTypes.length-1?" disabled":"") + '>▼</button>';
           html += '<button type="button" data-action="startTypeEdit" data-id="' + dt.id + '" aria-label="이름 수정">수정</button>';
           html += '<button type="button" class="del' + pendingCls + '" data-action="deleteType" data-id="' + dt.id + '"' + (inUse?" disabled title=\"사용 중인 종류는 삭제할 수 없어요\"":"") + '>' + (pendingDeleteType===dt.id ? "정말?" : "삭제") + '</button>';
         }
@@ -2552,6 +2557,37 @@
     publishState(newState, { flash: "드럼 종류를 삭제했어요", keepTab: "settings" }).then(function(){ render(); });
   }
 
+  // id를 가진 항목을 배열 안에서 direction만큼(-1: 위로, 1: 아래로) 옮긴
+  // 새 배열을 돌려준다. 이동할 수 없으면(끝에 닿음/못 찾음) 원본 배열을
+  // 그대로 돌려줘서 호출부가 "변경 없음"을 판별할 수 있게 한다.
+  function reorderArray(arr, id, direction){
+    var idx = arr.findIndex(function(x){ return x.id === id; });
+    if (idx === -1) return arr;
+    var newIdx = idx + direction;
+    if (newIdx < 0 || newIdx >= arr.length) return arr;
+    var copy = arr.slice();
+    var tmp = copy[idx];
+    copy[idx] = copy[newIdx];
+    copy[newIdx] = tmp;
+    return copy;
+  }
+  function moveType(id, direction){
+    if (isReadOnly) return;
+    var newDrumTypes = reorderArray(STATE.drumTypes, id, direction);
+    if (newDrumTypes === STATE.drumTypes) return;
+    var newState = Object.assign({}, STATE, { drumTypes: newDrumTypes });
+    publishState(newState, { keepTab: "settings" }).then(function(){ render(); });
+  }
+  function moveParty(kind, id, direction){
+    if (isReadOnly) return;
+    var key = partiesKey(kind);
+    var newList = reorderArray(STATE[key], id, direction);
+    if (newList === STATE[key]) return;
+    var newState = Object.assign({}, STATE);
+    newState[key] = newList;
+    publishState(newState, { keepTab: "settings" }).then(function(){ render(); });
+  }
+
   function addParty(kind){
     if (isReadOnly) return;
     var key = partiesKey(kind);
@@ -2708,11 +2744,13 @@
     else if (action === "cancelTypeEdit"){ cancelTypeEdit(); }
     else if (action === "saveTypeEdit"){ saveTypeEdit(t.dataset.id); }
     else if (action === "deleteType"){ if (!t.disabled) deleteType(t.dataset.id); }
+    else if (action === "moveType"){ if (!t.disabled) moveType(t.dataset.id, parseInt(t.dataset.dir, 10)); }
     else if (action === "addParty"){ addParty(t.dataset.kind); }
     else if (action === "startPartyEdit"){ startPartyEdit(t.dataset.kind, t.dataset.id); }
     else if (action === "cancelPartyEdit"){ cancelPartyEdit(t.dataset.kind); }
     else if (action === "savePartyEdit"){ savePartyEdit(t.dataset.kind, t.dataset.id); }
     else if (action === "deleteParty"){ if (!t.disabled) deleteParty(t.dataset.kind, t.dataset.id); }
+    else if (action === "moveParty"){ if (!t.disabled) moveParty(t.dataset.kind, t.dataset.id, parseInt(t.dataset.dir, 10)); }
     else if (action === "logout"){ logout(); }
     else if (action === "addDriver"){ addDriver(); }
     else if (action === "startDriverEdit"){ startDriverEdit(t.dataset.id); }
