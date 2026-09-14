@@ -1312,6 +1312,7 @@
 
   /* ---------- render: scrap (매각/폐기) ---------- */
   function renderScrapRow(t){
+    if (canEditTx(t, session) && editingTxId === t.id) return renderTxEditForm(t);
     var isSold = t.type === "sold";
     var pendingCls = pendingDeleteTx === t.id ? " pending" : "";
     var html = '<div class="tx-row">';
@@ -1331,7 +1332,10 @@
     if (t.note) html += '<div class="tx-note">' + esc(t.note) + '</div>';
     html += '</div>';
     if (!isReadOnly){
+      html += '<div class="tx-actions">';
+      if (canEditTx(t, session)) html += '<button type="button" class="tx-edit" data-action="startTxEdit" data-id="' + t.id + '">수정</button>';
       html += '<button type="button" class="tx-del' + pendingCls + '" data-action="deleteTx" data-id="' + t.id + '">' + (pendingDeleteTx === t.id ? "정말?" : "삭제") + '</button>';
+      html += '</div>';
     }
     html += '</div>';
     return html;
@@ -1447,7 +1451,7 @@
     if (recentProduced.length === 0){
       html += '<div class="empty">아직 재생 생산 기록이 없어요.</div>';
     } else {
-      recentProduced.forEach(function(t){ html += renderTxRow(t, true); });
+      recentProduced.forEach(function(t){ html += renderTxRow(t, true, canEditTx(t, session)); });
     }
     return html;
   }
