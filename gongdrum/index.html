@@ -84,7 +84,16 @@
   }
   .num{font-family:"JetBrains Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums;}
   button{font-family:inherit;}
-  input,select,textarea{font-family:inherit;font-size:16px;color:var(--ink);}
+  input,select,textarea{font-family:"Noto Sans KR",-apple-system,BlinkMacSystemFont,sans-serif;font-size:16px;color:var(--ink);}
+  input::placeholder,textarea::placeholder{font-family:inherit;}
+  input[type="date"]::-webkit-datetime-edit,
+  input[type="date"]::-webkit-datetime-edit-fields-wrapper,
+  input[type="date"]::-webkit-datetime-edit-text,
+  input[type="date"]::-webkit-datetime-edit-day-field,
+  input[type="date"]::-webkit-datetime-edit-month-field,
+  input[type="date"]::-webkit-datetime-edit-year-field{
+    font-family:"Noto Sans KR",-apple-system,BlinkMacSystemFont,sans-serif;
+  }
 
   a{color:var(--accent);}
 
@@ -995,7 +1004,9 @@
     html += '<div class="tx-top"><span class="tx-drum">' + esc(drumName(t.drumTypeId)) + '</span>';
     html += '<span class="tx-qty ' + (isPlus?"in":"out") + ' num">' + (isPlus?"+":"-") + fmtNum(t.qty) + '개</span></div>';
     if (txType === "produced"){
-      html += '<div class="tx-meta">' + fmtDate(t.date) + '</div>';
+      var producedMeta = fmtDate(t.date);
+      if (t.editedBy) producedMeta += ' (수정: ' + esc(t.editedBy) + ')';
+      html += '<div class="tx-meta">' + producedMeta + '</div>';
     } else {
       var handlerMeta = esc(t.handler || "-");
       if (t.editedBy) handlerMeta += ' (수정: ' + esc(t.editedBy) + ')';
@@ -1021,6 +1032,10 @@
 
   /* ---------- render: in/out tx inline edit form ---------- */
   function renderTxEditForm(t){
+    // 재생(produced)은 공급처·담당자 개념이 아예 없는 값이라 드럼
+    // 종류·수량·비고만 수정한다. 입고/출고/고철(disposed)은 출고처
+    // 계열(공급처·출고처)과 담당자를 함께 수정한다.
+    var isProduced = t.type === "produced";
     var parties = t.type === "in" ? STATE.inParties : STATE.outParties;
     var partyLabel = t.type === "in" ? "공급처" : "출고처";
     var err = editTxError || {};
@@ -1035,35 +1050,37 @@
     html += '<div class="qty-wrap"><input class="input" type="number" inputmode="numeric" min="1" step="1" data-field="editTxQty" value="' + esc(d.qty) + '"><span class="unit">개</span></div>';
     if (err.qty) html += '<div class="err">' + esc(err.qty) + '</div>';
     html += '</div>';
-    html += '<div class="field' + (err.partyId?" has-err":"") + '"><label>' + partyLabel + '</label>';
-    html += '<select class="input" data-field="editTxPartyId">';
-    html += '<option value="">선택해주세요</option>';
-    parties.forEach(function(p){
-      html += '<option value="' + p.id + '"' + (d.partyId === p.id ? " selected" : "") + '>' + esc(p.name) + '</option>';
-    });
-    html += '<option value="' + OTHER_PARTY_ID + '"' + (d.partyId === OTHER_PARTY_ID ? " selected" : "") + '>기타 (직접 입력)</option>';
-    html += '</select>';
-    if (err.partyId) html += '<div class="err">' + esc(err.partyId) + '</div>';
-    html += '</div>';
-    if (d.partyId === OTHER_PARTY_ID){
-      html += '<div class="field' + (err.party?" has-err":"") + '"><label>' + partyLabel + ' 직접 입력</label>';
-      html += '<input class="input" data-field="editTxParty" value="' + esc(d.party) + '"></div>';
-      if (err.party) html += '<div class="err">' + esc(err.party) + '</div>';
-    }
-    html += '<div class="field' + (err.handlerId?" has-err":"") + '"><label>담당자</label>';
-    html += '<select class="input" data-field="editTxHandlerId">';
-    html += '<option value="">선택해주세요</option>';
-    STATE.drivers.forEach(function(dr){
-      html += '<option value="' + dr.id + '"' + (d.handlerId === dr.id ? " selected" : "") + '>' + esc(dr.name) + '</option>';
-    });
-    html += '<option value="' + OTHER_HANDLER_ID + '"' + (d.handlerId === OTHER_HANDLER_ID ? " selected" : "") + '>기타 (직접 입력)</option>';
-    html += '</select>';
-    if (err.handlerId) html += '<div class="err">' + esc(err.handlerId) + '</div>';
-    html += '</div>';
-    if (d.handlerId === OTHER_HANDLER_ID){
-      html += '<div class="field' + (err.handler?" has-err":"") + '"><label>담당자 직접 입력</label>';
-      html += '<input class="input" data-field="editTxHandler" value="' + esc(d.handler) + '"></div>';
-      if (err.handler) html += '<div class="err">' + esc(err.handler) + '</div>';
+    if (!isProduced){
+      html += '<div class="field' + (err.partyId?" has-err":"") + '"><label>' + partyLabel + '</label>';
+      html += '<select class="input" data-field="editTxPartyId">';
+      html += '<option value="">선택해주세요</option>';
+      parties.forEach(function(p){
+        html += '<option value="' + p.id + '"' + (d.partyId === p.id ? " selected" : "") + '>' + esc(p.name) + '</option>';
+      });
+      html += '<option value="' + OTHER_PARTY_ID + '"' + (d.partyId === OTHER_PARTY_ID ? " selected" : "") + '>기타 (직접 입력)</option>';
+      html += '</select>';
+      if (err.partyId) html += '<div class="err">' + esc(err.partyId) + '</div>';
+      html += '</div>';
+      if (d.partyId === OTHER_PARTY_ID){
+        html += '<div class="field' + (err.party?" has-err":"") + '"><label>' + partyLabel + ' 직접 입력</label>';
+        html += '<input class="input" data-field="editTxParty" value="' + esc(d.party) + '"></div>';
+        if (err.party) html += '<div class="err">' + esc(err.party) + '</div>';
+      }
+      html += '<div class="field' + (err.handlerId?" has-err":"") + '"><label>담당자</label>';
+      html += '<select class="input" data-field="editTxHandlerId">';
+      html += '<option value="">선택해주세요</option>';
+      STATE.drivers.forEach(function(dr){
+        html += '<option value="' + dr.id + '"' + (d.handlerId === dr.id ? " selected" : "") + '>' + esc(dr.name) + '</option>';
+      });
+      html += '<option value="' + OTHER_HANDLER_ID + '"' + (d.handlerId === OTHER_HANDLER_ID ? " selected" : "") + '>기타 (직접 입력)</option>';
+      html += '</select>';
+      if (err.handlerId) html += '<div class="err">' + esc(err.handlerId) + '</div>';
+      html += '</div>';
+      if (d.handlerId === OTHER_HANDLER_ID){
+        html += '<div class="field' + (err.handler?" has-err":"") + '"><label>담당자 직접 입력</label>';
+        html += '<input class="input" data-field="editTxHandler" value="' + esc(d.handler) + '"></div>';
+        if (err.handler) html += '<div class="err">' + esc(err.handler) + '</div>';
+      }
     }
     html += '<div class="field"><label>비고 (선택)</label><textarea class="input" data-field="editTxNote">' + esc(d.note) + '</textarea></div>';
     html += '<div style="display:flex;gap:8px">';
@@ -1126,11 +1143,10 @@
       html += '<div class="empty">' + (restrictToOwn ? "아직 등록한 기록이 없어요." : "조건에 맞는 기록이 없어요.") + '</div>';
     } else {
       // 입고/출고 기록은 관리자와 (본인 소유 기록에 한해) 기사님 모두
-      // 이력 페이지에서 바로 수정할 수 있다. 재생·고철 기록은 이 화면의
-      // 수정 폼이 지원하지 않으므로 대상에서 제외한다.
+      // 이력 페이지에서 바로 수정할 수 있다. 재생·고철 기록은 관리자
+      // 전용 기록이라 기사님 화면에는 애초에 나타나지 않는다.
       list.forEach(function(t){
-        var editable = (t.type === "in" || t.type === "out") && (isAdmin || restrictToOwn);
-        html += renderTxRow(t, true, editable);
+        html += renderTxRow(t, true, canEditTx(t, session));
       });
     }
     return html;
@@ -1304,9 +1320,13 @@
     html += '<div class="tx-top"><span class="tx-drum">' + esc(drumName(t.drumTypeId)) + '</span>';
     html += '<span class="tx-qty out num">-' + fmtNum(t.qty) + '개</span></div>';
     if (t.party || t.handler){
-      html += '<div class="tx-meta">' + fmtDate(t.date) + ' · ' + esc(t.party || "-") + ' · ' + esc(t.handler || "-") + '</div>';
+      var scrapHandlerMeta = esc(t.handler || "-");
+      if (t.editedBy) scrapHandlerMeta += ' (수정: ' + esc(t.editedBy) + ')';
+      html += '<div class="tx-meta">' + fmtDate(t.date) + ' · ' + esc(t.party || "-") + ' · ' + scrapHandlerMeta + '</div>';
     } else {
-      html += '<div class="tx-meta">' + fmtDate(t.date) + '</div>';
+      var scrapMeta = fmtDate(t.date);
+      if (t.editedBy) scrapMeta += ' (수정: ' + esc(t.editedBy) + ')';
+      html += '<div class="tx-meta">' + scrapMeta + '</div>';
     }
     if (t.note) html += '<div class="tx-note">' + esc(t.note) + '</div>';
     html += '</div>';
@@ -2438,22 +2458,30 @@
     publishState(newState, { flash: "기록을 삭제했어요" }).then(function(){ render(); });
   }
 
+  var EDITABLE_TX_TYPES = ["in", "out", "produced", "disposed"];
+
+  // 재생(produced)·고철(disposed)은 언제나 관리자 전용 기록이라 기사님은
+  // 소유 여부와 상관없이 수정할 수 없다 (애초에 이력 화면에도 보이지
+  // 않는다). 입고/출고는 관리자거나 본인 소유 기록인 기사님만 가능하다.
+  function canEditTx(t, sess){
+    if (!t || EDITABLE_TX_TYPES.indexOf(t.type) === -1) return false;
+    if (sess.role === "admin") return true;
+    if (t.type !== "in" && t.type !== "out") return false;
+    return sess.role === "driver" && txOwnedByDriver(t, sess);
+  }
+
   function startTxEdit(id){
     if (!session) return;
     var t = STATE.transactions.filter(function(x){ return x.id === id; })[0];
-    if (!t || (t.type !== "in" && t.type !== "out")) return;
-    if (session.role === "driver"){
-      if (!txOwnedByDriver(t, session)) return;
-    } else if (session.role !== "admin"){
-      return;
-    }
+    if (!canEditTx(t, session)) return;
     editingTxId = id;
-    var handlerId = resolveHandlerIdForName(t.handler || "");
+    var isProduced = t.type === "produced";
+    var handlerId = isProduced ? "" : resolveHandlerIdForName(t.handler || "");
     editTxDraft = {
       drumTypeId: t.drumTypeId,
       qty: String(t.qty),
-      partyId: t.partyId || (t.party ? OTHER_PARTY_ID : ""),
-      party: t.partyId ? "" : (t.party || ""),
+      partyId: isProduced ? "" : (t.partyId || (t.party ? OTHER_PARTY_ID : "")),
+      party: isProduced ? "" : (t.partyId ? "" : (t.party || "")),
       handlerId: handlerId,
       handler: handlerId === OTHER_HANDLER_ID ? (t.handler || "") : "",
       note: t.note || ""
@@ -2468,48 +2496,49 @@
   function saveTxEdit(id){
     if (!session || isReadOnly || !editTxDraft) return;
     var t = STATE.transactions.filter(function(x){ return x.id === id; })[0];
-    if (!t) return;
-    if (session.role === "driver"){
-      if (!txOwnedByDriver(t, session)) return;
-    } else if (session.role !== "admin"){
-      return;
-    }
+    if (!canEditTx(t, session)) return;
+    var isProduced = t.type === "produced";
     var partyLabel = t.type === "in" ? "공급처" : "출고처";
     var errors = {};
     var qty = parseInt(editTxDraft.qty, 10);
     if (!qty || qty <= 0) errors.qty = "수량을 입력해주세요";
-    var partyId, partyName;
-    if (editTxDraft.partyId === OTHER_PARTY_ID){
-      partyId = null;
-      partyName = (editTxDraft.party || "").trim();
-      if (!partyName) errors.party = partyLabel + '를 입력해주세요';
-    } else {
-      var parties = t.type === "in" ? STATE.inParties : STATE.outParties;
-      var pMatch = parties.filter(function(p){ return p.id === editTxDraft.partyId; })[0];
-      partyId = editTxDraft.partyId || null;
-      partyName = pMatch ? pMatch.name : "";
-      if (!partyId) errors.partyId = partyLabel + '를 선택해주세요';
-    }
-    var handler;
-    if (editTxDraft.handlerId === OTHER_HANDLER_ID){
-      handler = (editTxDraft.handler || "").trim();
-      if (!handler) errors.handler = "담당자를 입력해주세요";
-    } else {
-      var handlerMatch = STATE.drivers.filter(function(dr){ return dr.id === editTxDraft.handlerId; })[0];
-      handler = handlerMatch ? handlerMatch.name : "";
-      if (!editTxDraft.handlerId) errors.handlerId = "담당자를 선택해주세요";
+    var partyId = null, partyName = "", handler = "";
+    if (!isProduced){
+      if (editTxDraft.partyId === OTHER_PARTY_ID){
+        partyId = null;
+        partyName = (editTxDraft.party || "").trim();
+        if (!partyName) errors.party = partyLabel + '를 입력해주세요';
+      } else {
+        var parties = t.type === "in" ? STATE.inParties : STATE.outParties;
+        var pMatch = parties.filter(function(p){ return p.id === editTxDraft.partyId; })[0];
+        partyId = editTxDraft.partyId || null;
+        partyName = pMatch ? pMatch.name : "";
+        if (!partyId) errors.partyId = partyLabel + '를 선택해주세요';
+      }
+      if (editTxDraft.handlerId === OTHER_HANDLER_ID){
+        handler = (editTxDraft.handler || "").trim();
+        if (!handler) errors.handler = "담당자를 입력해주세요";
+      } else {
+        var handlerMatch = STATE.drivers.filter(function(dr){ return dr.id === editTxDraft.handlerId; })[0];
+        handler = handlerMatch ? handlerMatch.name : "";
+        if (!editTxDraft.handlerId) errors.handlerId = "담당자를 선택해주세요";
+      }
     }
     if (Object.keys(errors).length){ editTxError = errors; render(); return; }
 
     var newState = Object.assign({}, STATE, {
       transactions: STATE.transactions.map(function(x){
         if (x.id !== id) return x;
-        return Object.assign({}, x, {
+        var patch = {
           drumTypeId: editTxDraft.drumTypeId,
-          qty: qty, party: partyName, partyId: partyId, handler: handler,
+          qty: qty,
           note: (editTxDraft.note || "").trim(),
           editedBy: session.name, editedAt: Date.now()
-        });
+        };
+        if (!isProduced){
+          patch.party = partyName; patch.partyId = partyId; patch.handler = handler;
+        }
+        return Object.assign({}, x, patch);
       })
     });
     editingTxId = null; editTxDraft = null; editTxError = {};
