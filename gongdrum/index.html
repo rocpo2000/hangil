@@ -1191,7 +1191,7 @@
     if (editingThisBatch) return renderTxBatchEditForm(group.items[0]);
     var isPlus = group.type === "in";
     var rep = group.items[0];
-    var pendingCls = pendingDeleteTx === group.key ? " pending" : "";
+    var pendingCls = pendingDeleteTx === rep.id ? " pending" : "";
     var html = '<div class="tx-row">';
     html += '<span class="pill ' + (isPlus?"in":"out") + '">' + HISTORY_PILL[group.type] + '</span>';
     html += '<div class="tx-main">';
@@ -1214,7 +1214,7 @@
     if ((editable || withDelete) && !isReadOnly){
       html += '<div class="tx-actions">';
       if (editable) html += '<button type="button" class="tx-edit" data-action="startTxEdit" data-id="' + rep.id + '">수정</button>';
-      if (withDelete) html += '<button type="button" class="tx-del' + pendingCls + '" data-action="deleteTxBatch" data-key="' + esc(group.key) + '" data-type="' + group.type + '">' + (pendingDeleteTx === group.key ? "정말?" : "삭제") + '</button>';
+      if (withDelete) html += '<button type="button" class="tx-del' + pendingCls + '" data-action="deleteTxBatch" data-id="' + rep.id + '">' + (pendingDeleteTx === rep.id ? "정말?" : "삭제") + '</button>';
       html += '</div>';
     }
     html += '</div>';
@@ -2635,16 +2635,40 @@
     return ownedById || ownedByName;
   }
 
-  // 입고/출고 기록을 "한 번에 입력한 것"으로 묶는 기준은 등록 시각이
-  // 아니라 날짜·공급처(출고처)다. 같은 날 같은 거래처로 등록된 기록은
-  // 몇 번에 나눠 입력했든(예전 기록 포함) 모두 한 데 모여 카드 하나로
-  // 보이고 한꺼번에 수정할 수 있다.
+  // 입고/출고 기록을 "한 번에 입력한 것"으로 묶는 기준은 날짜·공급처
+  // (출고처)이면서, 동시에 등록 시각(ts)도 가깝게 붙어있어야 한다. 같은
+  // 거래처라도 시간을 두고 따로따로 등록한 것은 서로 다른 입력 건으로
+  // 나눠서 보여준다. 한 번의 제출로 여러 드럼 종류를 등록하면 그
+  // 기록들의 ts는 몇 ms 안쪽으로 거의 붙어있으므로, 이 간격보다 크게
+  // 벌어지면 다른 등록 건으로 취급한다.
+  var BATCH_TIME_GAP_MS = 5000;
   function txBatchKey(t){
     var partyKey = t.partyId ? ("id:" + t.partyId) : ("name:" + (t.party || ""));
     return t.type + "|" + t.date + "|" + partyKey;
   }
+  // 이미 같은 txBatchKey를 가진 기록들(items)을 ts 기준으로 정렬한 뒤,
+  // 간격이 BATCH_TIME_GAP_MS보다 벌어지는 지점마다 잘라서 등록시간별
+  // 묶음 배열로 나눈다.
+  function splitByRegistrationTime(items){
+    var sorted = items.slice().sort(function(a,b){ return a.ts - b.ts; });
+    var clusters = [];
+    var current = [];
+    sorted.forEach(function(t){
+      if (current.length && (t.ts - current[current.length-1].ts) > BATCH_TIME_GAP_MS){
+        clusters.push(current);
+        current = [];
+      }
+      current.push(t);
+    });
+    if (current.length) clusters.push(current);
+    return clusters;
+  }
   function txBatchSiblings(t){
-    return STATE.transactions.filter(function(x){ return x.type === t.type && txBatchKey(x) === txBatchKey(t); });
+    var coarse = STATE.transactions.filter(function(x){ return x.type === t.type && txBatchKey(x) === txBatchKey(t); });
+    var cluster = splitByRegistrationTime(coarse).filter(function(c){
+      return c.some(function(x){ return x.id === t.id; });
+    })[0];
+    return cluster || [t];
   }
   // 같은 묶음 안에 같은 드럼 종류 기록이 여러 건(서로 다른 시점에 나눠
   // 등록한 경우) 있을 수 있어, 화면 표시와 수정 체크리스트 모두 드럼
@@ -2665,37 +2689,45 @@
     return order;
   }
   // 이미 날짜/종류 등으로 걸러진 입고 또는 출고 기록 목록(list)을 같은
-  // 묶음끼리 하나의 카드로 합친다. list는 ts 내림차순으로 정렬돼 있다고
-  // 가정하고, 각 묶음은 자신의 가장 최근 항목이 처음 나온 위치를 그대로
-  // 유지해 전체 정렬 순서가 흐트러지지 않게 한다.
+  // 거래처·등록시간 묶음끼리 하나의 카드로 합친다. 결과는 각 묶음의
+  // 가장 최근 항목 기준으로 최신순 정렬한다.
   function groupTxByBatch(list){
     var order = [];
     var byKey = {};
     list.forEach(function(t){
       var key = txBatchKey(t);
-      if (!byKey[key]){ byKey[key] = { key: key, type: t.type, items: [] }; order.push(byKey[key]); }
-      byKey[key].items.push(t);
+      if (!byKey[key]){ byKey[key] = []; order.push(key); }
+      byKey[key].push(t);
     });
-    order.forEach(function(g){ g.items.sort(function(a,b){ return a.ts - b.ts; }); });
-    return order;
+    var groups = [];
+    order.forEach(function(key){
+      splitByRegistrationTime(byKey[key]).forEach(function(items){
+        groups.push({ type: items[0].type, items: items });
+      });
+    });
+    groups.sort(function(a,b){ return b.items[b.items.length-1].ts - a.items[a.items.length-1].ts; });
+    return groups;
   }
   // 이력 페이지처럼 입고/출고(묶음 처리 대상)와 재생/고철(단건 처리)이
   // 함께 섞여 나오는 목록을 위해, 입고/출고는 묶음으로 접고 나머지는
   // 그대로 둔 "표시 단위" 배열을 만들어 원래의 최신순 정렬을 유지한다.
   function buildHistoryUnits(list){
-    var seen = {};
+    var coarseByKey = {};
+    var coarseOrder = [];
     var units = [];
     list.forEach(function(t){
       if (t.type === "in" || t.type === "out"){
         var key = txBatchKey(t);
-        if (seen[key]) return;
-        seen[key] = true;
-        var items = list.filter(function(x){ return (x.type === "in" || x.type === "out") && txBatchKey(x) === key; })
-          .sort(function(a,b){ return a.ts - b.ts; });
-        units.push({ kind: "batch", key: key, type: t.type, items: items, maxTs: items[items.length-1].ts });
+        if (!coarseByKey[key]){ coarseByKey[key] = []; coarseOrder.push(key); }
+        coarseByKey[key].push(t);
       } else {
         units.push({ kind: "single", tx: t, maxTs: t.ts });
       }
+    });
+    coarseOrder.forEach(function(key){
+      splitByRegistrationTime(coarseByKey[key]).forEach(function(items){
+        units.push({ kind: "batch", type: items[0].type, items: items, maxTs: items[items.length-1].ts });
+      });
     });
     units.sort(function(a,b){ return b.maxTs - a.maxTs; });
     return units;
@@ -2713,20 +2745,25 @@
     publishState(newState, { flash: "기록을 삭제했어요" }).then(function(){ render(); });
   }
 
-  // 한 번에 등록된 입고/출고 묶음 전체를 삭제한다 (pendingDeleteTx는
-  // 개별 삭제와 같은 방식으로 묶음의 key를 담아 "정말?" 확인을 거친다).
-  function deleteTxBatch(key, type){
+  // 한 번에 등록된 입고/출고 묶음 전체를 삭제한다. id는 "삭제" 버튼이
+  // 붙어있던 대표 기록의 id이고, 실제로 지울 대상은 그 기록과 같은
+  // 거래처·등록시간 묶음(txBatchSiblings)에 속한 기록 전체다.
+  // pendingDeleteTx는 개별 삭제와 같은 방식으로 그 대표 id를 담아
+  // "정말?" 확인을 거친다.
+  function deleteTxBatch(id){
     if (!session || isReadOnly) return;
-    var members = STATE.transactions.filter(function(t){ return t.type === type && txBatchKey(t) === key; });
-    if (!members.length) return;
+    var t = STATE.transactions.filter(function(x){ return x.id === id; })[0];
+    if (!t) return;
+    var members = txBatchSiblings(t);
     if (session.role === "driver"){
-      var ownedAll = members.every(function(t){ return txOwnedByDriver(t, session); });
+      var ownedAll = members.every(function(x){ return txOwnedByDriver(x, session); });
       if (!ownedAll) return;
     }
-    if (pendingDeleteTx !== key){ pendingDeleteTx = key; render(); return; }
+    if (pendingDeleteTx !== id){ pendingDeleteTx = id; render(); return; }
     pendingDeleteTx = null;
+    var memberIds = members.map(function(x){ return x.id; });
     var newState = Object.assign({}, STATE, {
-      transactions: STATE.transactions.filter(function(t){ return !(t.type === type && txBatchKey(t) === key); })
+      transactions: STATE.transactions.filter(function(x){ return memberIds.indexOf(x.id) === -1; })
     });
     publishState(newState, { flash: "기록을 삭제했어요" }).then(function(){ render(); });
   }
@@ -2900,8 +2937,11 @@
     var date = editTxDraft.date;
     var note = (editTxDraft.note || "").trim();
     var editedAt = Date.now();
-    var ts0 = editedAt;
-    var seq = 0;
+    // 새로 체크해서 추가되는 드럼 종류는 원래 등록 시각(rep.ts) 근처의
+    // ts를 부여해, 등록시간 기준 묶음 분류에서 같은 묶음으로 계속
+    // 남도록 한다 (현재 시각을 쓰면 묶음이 갈라져 버릴 수 있다).
+    var ts0 = rep.ts;
+    var seq = 1;
 
     var updatedBatchTxs = checkedItems.map(function(item){
       var existing = survivingByDrum[item.drumTypeId];
@@ -3154,7 +3194,7 @@
     if (action === "switchTab"){ e.preventDefault(); switchTab(t.dataset.tab); }
     else if (action === "setHistoryType"){ setHistoryType(t.dataset.value); }
     else if (action === "deleteTx"){ deleteTx(t.dataset.id); }
-    else if (action === "deleteTxBatch"){ deleteTxBatch(t.dataset.key, t.dataset.type); }
+    else if (action === "deleteTxBatch"){ deleteTxBatch(t.dataset.id); }
     else if (action === "startTxEdit"){ startTxEdit(t.dataset.id); }
     else if (action === "cancelTxEdit"){ cancelTxEdit(); }
     else if (action === "saveTxEdit"){ saveTxEdit(t.dataset.id); }
