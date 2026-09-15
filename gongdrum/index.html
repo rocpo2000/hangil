@@ -1190,6 +1190,21 @@
     }).sort(function(a,b){ return b.total - a.total; });
   }
 
+  // 엑셀 요약 시트의 "입고처별 총입고량"/"출고처별 총출고량" 표를 위해
+  // in/out을 각각 따로(섞지 않고) 업체별로 합산한다.
+  function groupQtyByParty(date, type){
+    var order = [];
+    var byName = {};
+    STATE.transactions.forEach(function(t){
+      if (t.date !== date || t.type !== type) return;
+      var key = t.party || "(미지정)";
+      if (!byName[key]) { byName[key] = 0; order.push(key); }
+      byName[key] += t.qty;
+    });
+    return order.map(function(key){ return { name: key, qty: byName[key] }; })
+      .sort(function(a,b){ return b.qty - a.qty; });
+  }
+
   function renderReport(){
     var summary = computeDailySummary(reportDate);
     var totalIn = summary.reduce(function(s,r){ return s + r.in; }, 0);
@@ -1263,6 +1278,42 @@
     }
     var date = reportDate;
     var partyGroups = computePartySummary(date);
+    var summary = computeDailySummary(date);
+    var inPartyTotals = groupQtyByParty(date, "in");
+    var outPartyTotals = groupQtyByParty(date, "out");
+    var totalIn = summary.reduce(function(s,r){ return s + r.in; }, 0);
+    var totalOut = summary.reduce(function(s,r){ return s + r.out; }, 0);
+    var totalProduced = summary.reduce(function(s,r){ return s + r.produced; }, 0);
+    var totalDisposed = summary.reduce(function(s,r){ return s + r.disposed; }, 0);
+
+    // "요약" 시트: 그날 있었던 전체 총량, 입고처별/출고처별 총량,
+    // 종류별 요약을 한 시트에 모아 열자마자 한눈에 파악할 수 있게 한다.
+    var overviewRows = [];
+    overviewRows.push(["공드럼 입출고 현황 · " + fmtDate(date)]);
+    overviewRows.push([]);
+    overviewRows.push(["전체 요약"]);
+    overviewRows.push(["총입고량", totalIn]);
+    overviewRows.push(["총재생량", totalProduced]);
+    overviewRows.push(["총출고량", totalOut]);
+    overviewRows.push(["총고철량", totalDisposed]);
+    overviewRows.push([]);
+    overviewRows.push(["입고처별 총입고량"]);
+    overviewRows.push(["업체명", "입고량"]);
+    if (inPartyTotals.length === 0) overviewRows.push(["(입고 기록 없음)", 0]);
+    else inPartyTotals.forEach(function(p){ overviewRows.push([p.name, p.qty]); });
+    overviewRows.push([]);
+    overviewRows.push(["출고처별 총출고량"]);
+    overviewRows.push(["업체명", "출고량"]);
+    if (outPartyTotals.length === 0) overviewRows.push(["(출고 기록 없음)", 0]);
+    else outPartyTotals.forEach(function(p){ overviewRows.push([p.name, p.qty]); });
+    overviewRows.push([]);
+    overviewRows.push(["종류별 요약"]);
+    overviewRows.push(["드럼 종류", "입고", "재생", "출고", "고철", "순증감"]);
+    summary.forEach(function(r){ overviewRows.push([r.name, r.in, r.produced, r.out, r.disposed, r.net]); });
+
+    var overviewSheet = XLSX.utils.aoa_to_sheet(overviewRows);
+    overviewSheet['!cols'] = [{ wch: 22 }, { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }];
+    overviewSheet['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }];
 
     var partyRows = [["업체명", "입고", "출고", "합계"]];
     partyGroups.forEach(function(g){ partyRows.push([g.name, g.in, g.out, g.total]); });
@@ -1281,7 +1332,6 @@
       });
     });
 
-    var summary = computeDailySummary(date);
     var summaryRows = [["드럼 종류", "입고", "재생", "출고", "고철", "순증감"]];
     summary.forEach(function(r){ summaryRows.push([r.name, r.in, r.produced, r.out, r.disposed, r.net]); });
 
@@ -1302,6 +1352,7 @@
     });
 
     var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, overviewSheet, "요약");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(partyRows), "업체별 요약");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detailRows), "상세");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), "종류별 요약");
