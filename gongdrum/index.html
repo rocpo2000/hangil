@@ -444,7 +444,7 @@
   var pendingDeleteType = null;
   var pendingDeleteDriver = null;
   var pendingDeleteAdmin = null;
-  var pendingDeleteParty = { "in": null, "out": null };
+  var pendingDeleteParty = { "in": null, "out": null, "disposed": null };
   var submitting = { "in": false, "out": false, "produced": false, "disposed": false };
   var formView = { "in": "form", "out": "form" }; // "form" | "result"
   var lastResult = { "in": null, "out": null };
@@ -452,7 +452,7 @@
     "in": { checks: {}, otherCheck: {} }, "out": { checks: {}, otherCheck: {} },
     "produced": { produced: {} },
     "disposed": { scrapDisposed: {} },
-    addType: "", addParty: { "in": "", "out": "" }, addDriver: "", addAdmin: ""
+    addType: "", addParty: { "in": "", "out": "", "disposed": "" }, addDriver: "", addAdmin: ""
   };
   var formDrafts = {
     "in": {
@@ -473,7 +473,7 @@
       partyId: "", party: "", handlerId: "", handler: "", note: ""
     },
     addType: "",
-    addParty: { "in": "", "out": "" },
+    addParty: { "in": "", "out": "", "disposed": "" },
     login: { username: "", password: "" },
     addDriver: { name: "", username: "", password: "" },
     addAdmin: { name: "", username: "", password: "", type: "production" }
@@ -489,8 +489,8 @@
   var editingAdminUsername = "";
   var editingAdminPassword = "";
   var editingAdminType = "production";
-  var editingPartyId = { "in": null, "out": null };
-  var editingPartyValue = { "in": "", "out": "" };
+  var editingPartyId = { "in": null, "out": null, "disposed": null };
+  var editingPartyValue = { "in": "", "out": "", "disposed": "" };
   var toastTimer = null;
   var draftSaveTimer = null;
 
@@ -614,9 +614,25 @@
   function typeInUse(state, id){
     return state.transactions.some(function(t){ return t.drumTypeId === id; });
   }
-  function partiesKey(kind){ return kind === "in" ? "inParties" : "outParties"; }
+  function partiesKey(kind){
+    if (kind === "in") return "inParties";
+    if (kind === "disposed") return "disposedParties";
+    return "outParties";
+  }
   function partyInUse(state, kind, id){
     return state.transactions.some(function(t){ return t.type === kind && t.partyId === id; });
+  }
+  // 거래 유형(in/out/disposed)별로 어떤 거래처 목록·표시 이름을 쓸지
+  // 한 곳에서 정한다. 등록 폼과 기록 수정 폼이 이 매핑을 함께 쓴다.
+  function partiesForTxType(type){
+    if (type === "in") return STATE.inParties;
+    if (type === "disposed") return STATE.disposedParties;
+    return STATE.outParties;
+  }
+  function partyLabelForTxType(type){
+    if (type === "in") return "공급처";
+    if (type === "disposed") return "고철 폐기처";
+    return "출고처";
   }
   // 로그인 아이디는 기사님·관리자 계정을 통틀어 하나의 이름공간을 쓰므로
   // 두 목록 모두에서 중복 여부를 확인한다.
@@ -801,7 +817,8 @@
         { id:"admin-default-general", username:"admin", name:"전체관리자", password:"admin1234", type:"general" }
       ],
       inParties: [],
-      outParties: []
+      outParties: [],
+      disposedParties: []
     };
   }
   function normalizeState(s){
@@ -836,6 +853,11 @@
       if (!Array.isArray(s.outParties)) s.outParties = legacy.slice();
     }
     delete s.parties;
+    // 고철 폐기 출고처는 예전엔 일반 출고처 목록을 그대로 썼다. 처음
+    // 분리될 때는 기존 출고처 목록을 그대로 복사해와 이미 등록된 고철
+    // 폐기 기록의 출고처가 계속 정상적으로 표시되게 하고, 이후로는
+    // 출고처 목록과 서로 독립적으로 관리한다.
+    if (!Array.isArray(s.disposedParties)) s.disposedParties = s.outParties.slice();
     return s;
   }
   function loadStateFromDOM(){
@@ -1036,8 +1058,8 @@
     // 종류·수량·비고만 수정한다. 입고/출고/고철(disposed)은 출고처
     // 계열(공급처·출고처)과 담당자를 함께 수정한다.
     var isProduced = t.type === "produced";
-    var parties = t.type === "in" ? STATE.inParties : STATE.outParties;
-    var partyLabel = t.type === "in" ? "공급처" : "출고처";
+    var parties = partiesForTxType(t.type);
+    var partyLabel = partyLabelForTxType(t.type);
     var err = editTxError || {};
     var d = editTxDraft;
     var html = '<div class="tx-row tx-edit-row">';
@@ -1675,7 +1697,7 @@
     var d = formDrafts["disposed"];
     ensureDisposedChecks(d);
     var err = formErrors["disposed"] || { scrapDisposed: {} };
-    var partyLabel = "출고처";
+    var partyLabel = "고철 폐기처";
     var partyPh = "업체명";
 
     var html = '<form data-form="disposed" data-action-submit="disposed">';
@@ -1713,7 +1735,7 @@
     html += '<label for="f-partyId">' + esc(partyLabel) + '</label>';
     html += '<select class="input" id="f-partyId" data-field="partyId">';
     html += '<option value="">선택해주세요</option>';
-    STATE.outParties.forEach(function(p){
+    STATE.disposedParties.forEach(function(p){
       var sel = d.partyId === p.id ? " selected" : "";
       html += '<option value="' + p.id + '"' + sel + '>' + esc(p.name) + '</option>';
     });
@@ -1867,6 +1889,7 @@
 
     html += renderPartySection("in", "입고 공급처 관리", "새 공급처 이름 (예: 대성상사)", "사용 중인 공급처는 삭제할 수 없어요");
     html += renderPartySection("out", "출고처 관리 (용도·출고처)", "새 출고처 이름 (예: 세척 후 재사용)", "사용 중인 출고처는 삭제할 수 없어요");
+    html += renderPartySection("disposed", "고철 폐기처 관리", "새 고철 폐기처 이름 (예: OO고철상사)", "사용 중인 고철 폐기처는 삭제할 수 없어요");
 
     html += '<div class="section-title">기사님 계정 관리 (이름·아이디·비밀번호)</div>';
     if (STATE.drivers.length === 0){
@@ -1953,10 +1976,10 @@
     pendingDeleteTx = null;
     pendingDeleteType = null;
     pendingDeleteDriver = null;
-    pendingDeleteParty = { "in": null, "out": null };
+    pendingDeleteParty = { "in": null, "out": null, "disposed": null };
     editingTypeId = null;
     editingDriverId = null;
-    editingPartyId = { "in": null, "out": null };
+    editingPartyId = { "in": null, "out": null, "disposed": null };
     editingTxId = null;
     editTxDraft = null;
     editTxError = {};
@@ -2116,8 +2139,8 @@
 
     if (!anyScrapChecked) errors.noneChecked = "폐기할 드럼 종류를 하나 이상 선택해주세요";
 
-    if (!d.partyId) errors.partyId = "출고처를 선택해주세요";
-    else if (d.partyId === OTHER_PARTY_ID && (!d.party || !d.party.trim())) errors.party = "출고처를 입력해주세요";
+    if (!d.partyId) errors.partyId = "고철 폐기처를 선택해주세요";
+    else if (d.partyId === OTHER_PARTY_ID && (!d.party || !d.party.trim())) errors.party = "고철 폐기처를 입력해주세요";
     if (!d.handlerId) errors.handlerId = "담당자를 선택해주세요";
     else if (d.handlerId === OTHER_HANDLER_ID && (!d.handler || !d.handler.trim())) errors.handler = "담당자를 입력해주세요";
     return errors;
@@ -2233,7 +2256,7 @@
       partyId = null;
       partyName = (d.party || "").trim();
     } else {
-      var pMatch = STATE.outParties.filter(function(p){ return p.id === d.partyId; })[0];
+      var pMatch = STATE.disposedParties.filter(function(p){ return p.id === d.partyId; })[0];
       partyId = d.partyId || null;
       partyName = pMatch ? pMatch.name : "";
     }
@@ -2553,7 +2576,7 @@
     var t = STATE.transactions.filter(function(x){ return x.id === id; })[0];
     if (!canEditTx(t, session)) return;
     var isProduced = t.type === "produced";
-    var partyLabel = t.type === "in" ? "공급처" : "출고처";
+    var partyLabel = partyLabelForTxType(t.type);
     var errors = {};
     var qty = parseInt(editTxDraft.qty, 10);
     if (!qty || qty <= 0) errors.qty = "수량을 입력해주세요";
@@ -2564,7 +2587,7 @@
         partyName = (editTxDraft.party || "").trim();
         if (!partyName) errors.party = partyLabel + '를 입력해주세요';
       } else {
-        var parties = t.type === "in" ? STATE.inParties : STATE.outParties;
+        var parties = partiesForTxType(t.type);
         var pMatch = parties.filter(function(p){ return p.id === editTxDraft.partyId; })[0];
         partyId = editTxDraft.partyId || null;
         partyName = pMatch ? pMatch.name : "";
