@@ -1238,7 +1238,7 @@
       partyGroups.forEach(function(g){
         html += '<div class="party-card">';
         html += '<div class="party-card-head"><span class="party-card-name">' + esc(g.name) + '</span>';
-        html += '<span class="party-card-total num">합계 ' + fmtNum(g.total) + '개</span></div>';
+        html += '<span class="party-card-total num">총입고 <b>' + fmtNum(g.in) + '</b>개 · 총출고 <b>' + fmtNum(g.out) + '</b>개</span></div>';
         html += '<div class="report-table-wrap"><table class="report-table"><thead><tr><th>구분</th><th>드럼 종류</th><th>수량</th><th>재생/고철</th><th>담당자</th></tr></thead><tbody>';
         g.items.forEach(function(t){
           var isIn = t.type === "in";
