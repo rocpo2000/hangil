@@ -1808,14 +1808,6 @@
   // 출고 폼과 동일하게 함께 표시하고 기록에도 남긴다.
   function renderDisposedTab(){
     var html = "";
-    if (STATE.drumTypes.length > 0){
-      var totalScrapAll = 0;
-      STATE.drumTypes.forEach(function(dt){ totalScrapAll += computeScrapStock(STATE, dt.id); });
-      html += '<div class="summary-card">';
-      html += '<div><div class="label">전체 고철 재고</div><div class="value num">' + fmtNum(totalScrapAll) + '<small>개</small></div></div>';
-      html += '<div class="meta">' + STATE.drumTypes.length + '종</div>';
-      html += '</div>';
-    }
     html += renderDisposedForm();
 
     html += '<div class="section-title">최근 매각·폐기 기록</div>';
