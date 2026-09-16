@@ -986,14 +986,13 @@
 
       html += '<div class="section-title">종류별 상세 현황</div>';
       html += '<div class="report-table-wrap"><table class="report-table"><thead><tr>';
-      html += '<th>드럼 종류</th><th>총입고량</th><th>총재생량</th><th>총출고량</th><th>총매각량</th><th>총폐기량</th><th>재생량 재고</th><th>입고량 재고</th>';
+      html += '<th>드럼 종류</th><th>총입고량</th><th>총재생량</th><th>총출고량</th><th>총폐기량</th><th>재생량 재고</th><th>입고량 재고</th>';
       html += '</tr></thead><tbody>';
       totals.forEach(function(r){
         html += '<tr><td>' + esc(r.name) + '</td>';
         html += '<td class="num">' + fmtNum(r.totalIn) + '</td>';
         html += '<td class="num">' + fmtNum(r.totalProduced) + '</td>';
         html += '<td class="num">' + fmtNum(r.totalOut) + '</td>';
-        html += '<td class="num">' + fmtNum(r.totalSold) + '</td>';
         html += '<td class="num">' + fmtNum(r.totalDisposed) + '</td>';
         html += '<td class="num"><b>' + fmtNum(r.reclaimStock) + '</b></td>';
         html += '<td class="num"><b>' + fmtNum(r.inboundStock) + '</b></td></tr>';
