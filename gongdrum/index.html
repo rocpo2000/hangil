@@ -1355,6 +1355,10 @@
     var totalOut = summary.reduce(function(s,r){ return s + r.out; }, 0);
     var totalProduced = summary.reduce(function(s,r){ return s + r.produced; }, 0);
     var totalDisposed = summary.reduce(function(s,r){ return s + r.disposed; }, 0);
+    // 입고재고: 입고됐지만 아직 재생·폐기 처리되지 않은 물량.
+    // 재생재고: 재생됐지만 아직 출고되지 않은 물량.
+    var totalInboundStock = totalIn - totalProduced - totalDisposed;
+    var totalReclaimStock = totalProduced - totalOut;
     var partyGroups = computePartySummary(reportDate);
     var hasPartyActivity = partyGroups.length > 0;
     var hasProducedActivity = STATE.transactions.some(function(t){ return t.type === "produced" && t.date === reportDate; });
@@ -1371,6 +1375,8 @@
     html += '<div class="stat-box"><div class="stat-label">총재생량</div><div class="stat-value num">' + fmtNum(totalProduced) + '<small>개</small></div></div>';
     html += '<div class="stat-box"><div class="stat-label">총출고량</div><div class="stat-value num">' + fmtNum(totalOut) + '<small>개</small></div></div>';
     html += '<div class="stat-box"><div class="stat-label">총고철량</div><div class="stat-value num">' + fmtNum(totalDisposed) + '<small>개</small></div></div>';
+    html += '<div class="stat-box"><div class="stat-label">입고재고</div><div class="stat-value num">' + fmtNum(totalInboundStock) + '<small>개</small></div></div>';
+    html += '<div class="stat-box"><div class="stat-label">재생재고</div><div class="stat-value num">' + fmtNum(totalReclaimStock) + '<small>개</small></div></div>';
     html += '</div>';
 
     html += '<button type="button" class="btn primary" data-action="downloadExcel" style="margin-top:14px"' + (hasActivity ? "" : " disabled") + '>엑셀로 다운로드</button>';
