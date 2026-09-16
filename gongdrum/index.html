@@ -1311,7 +1311,14 @@
       // 아니라 재생 기준으로 계산한다 (입고는 참고용으로 별도 표시).
       // 고철 폐기는 재생량 재고와 무관한 값이라 순증감 계산에는 넣지
       // 않고 참고용 컬럼으로만 함께 보여준다.
-      return { id: dt.id, name: dt.name, in: inQty, out: outQty, produced: producedQty, disposed: disposedQty, net: producedQty - outQty };
+      // 입고재고: 입고됐지만 아직 재생·폐기 처리되지 않은 물량.
+      // 재생재고: 재생됐지만 아직 출고되지 않은 물량.
+      return {
+        id: dt.id, name: dt.name, in: inQty, out: outQty, produced: producedQty, disposed: disposedQty,
+        net: producedQty - outQty,
+        inboundStock: inQty - producedQty - disposedQty,
+        reclaimStock: producedQty - outQty
+      };
     });
   }
 
@@ -1407,13 +1414,15 @@
     if (!hasActivity){
       html += '<div class="empty">이 날짜에 등록된 입출고 기록이 없어요.</div>';
     } else {
-      html += '<div class="report-table-wrap"><table class="report-table"><thead><tr><th>드럼 종류</th><th>입고</th><th>재생</th><th>출고</th><th>고철</th><th>순증감</th></tr></thead><tbody>';
+      html += '<div class="report-table-wrap"><table class="report-table"><thead><tr><th>드럼 종류</th><th>입고</th><th>재생</th><th>출고</th><th>고철</th><th>입고재고</th><th>재생재고</th><th>순증감</th></tr></thead><tbody>';
       summary.forEach(function(r){
         html += '<tr><td>' + esc(r.name) + '</td>';
         html += '<td class="num in">' + (r.in ? "+" + fmtNum(r.in) : "-") + '</td>';
         html += '<td class="num in">' + (r.produced ? "+" + fmtNum(r.produced) : "-") + '</td>';
         html += '<td class="num out">' + (r.out ? "-" + fmtNum(r.out) : "-") + '</td>';
         html += '<td class="num out">' + (r.disposed ? "-" + fmtNum(r.disposed) : "-") + '</td>';
+        html += '<td class="num">' + fmtNum(r.inboundStock) + '</td>';
+        html += '<td class="num">' + fmtNum(r.reclaimStock) + '</td>';
         html += '<td class="num">' + (r.net > 0 ? "+" : "") + fmtNum(r.net) + '</td></tr>';
       });
       html += '</tbody></table></div>';
