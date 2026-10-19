@@ -1,0 +1,4 @@
+# 암호화된 인사 데이터와 백업은 저장소에 올리지 않는다
+data/
+config.json
+__pycache__/
