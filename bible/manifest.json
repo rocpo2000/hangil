@@ -1,0 +1,12 @@
+{
+  "name": "나의 성경",
+  "short_name": "나의 성경",
+  "description": "한글·영문 대조 성경",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f7f3ec",
+  "theme_color": "#7a4b1e",
+  "lang": "ko",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
